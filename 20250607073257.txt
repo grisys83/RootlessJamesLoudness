@@ -1,0 +1,70 @@
+┬───
+│ GC Root: Thread object
+│
+├─ android.os.FileObserver$ObserverThread instance
+│    Leaking: NO (PathClassLoader↓ is not leaking)
+│    Thread name: 'FileObserver'
+│    ↓ Thread.contextClassLoader
+├─ dalvik.system.PathClassLoader instance
+│    Leaking: NO (ToastEventListener↓ is not leaking and A ClassLoader is never
+│    leaking)
+│    ↓ ClassLoader.runtimeInternalObjects
+├─ java.lang.Object[] array
+│    Leaking: NO (ToastEventListener↓ is not leaking)
+│    ↓ Object[581]
+├─ leakcanary.ToastEventListener class
+│    Leaking: NO (a class is never leaking)
+│    ↓ static ToastEventListener.toastCurrentlyShown
+│                                ~~~~~~~~~~~~~~~~~~~
+├─ android.widget.Toast instance
+│    Leaking: UNKNOWN
+│    Retaining 8.0 kB in 138 objects
+│    mContext instance of me.timschneeberger.rootlessjamesdsp.activity.
+│    LoudnessControllerActivity with mDestroyed = true
+│    ↓ Toast.mContext
+│            ~~~~~~~~
+╰→ me.timschneeberger.rootlessjamesdsp.activity.LoudnessControllerActivity
+​  instance
+​     Leaking: YES (ObjectWatcher was watching this because me.timschneeberger.
+​     rootlessjamesdsp.activity.LoudnessControllerActivity received
+​     Activity#onDestroy() callback and Activity#mDestroyed is true)
+​     Retaining 269.1 kB in 4635 objects
+​     key = 8927560f-4ba0-4c04-9104-1166e088b7ed
+​     watchDurationMillis = 54972
+​     retainedDurationMillis = 49971
+​     mApplication instance of me.timschneeberger.rootlessjamesdsp.
+​     MainApplication
+​     mBase instance of androidx.appcompat.view.ContextThemeWrapper
+
+METADATA
+
+Build.VERSION.SDK_INT: 30
+Build.MANUFACTURER: LGE
+LeakCanary version: 2.10
+App process name: me.timschneeberger.rootlessjamesdsp.debug
+Class count: 24562
+Instance count: 225196
+Primitive array count: 131315
+Object array count: 32307
+Thread count: 60
+Heap total bytes: 26842277
+Bitmap count: 2
+Bitmap total bytes: 120738
+Large bitmap count: 0
+Large bitmap total bytes: 0
+Db 1: open /data/user/0/me.timschneeberger.rootlessjamesdsp.
+debug/databases/blocked_apps.db
+Db 2: closed /data/user/0/me.timschneeberger.rootlessjamesdsp.
+debug/databases/google_app_measurement_local.db
+Db 3: open /data/user/0/me.timschneeberger.rootlessjamesdsp.debug/databases/com.
+google.android.datatransport.events
+Db 4: open /data/user/0/me.timschneeberger.rootlessjamesdsp.
+debug/no_backup/androidx.work.workdb
+Db 5: open /data/user/0/me.timschneeberger.rootlessjamesdsp.
+debug/databases/_pluto_network_database
+Db 6: open /data/user/0/me.timschneeberger.rootlessjamesdsp.
+debug/databases/_pluto_exception_database
+Stats: LruCache[maxSize=3000,hits=61667,misses=164799,hitRate=27%]
+RandomAccess[bytes=8185231,reads=164799,travel=53380055020,range=32456837,size=3
+9484047]
+Analysis duration: 5437 ms

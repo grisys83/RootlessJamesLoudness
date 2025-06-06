@@ -279,9 +279,9 @@ class LoudnessControllerActivity : BaseActivity() {
                     apply()
                 }
                 
-                // Generate filter filename
-                val filterFile = "${targetPhon}-${referencePhon.toInt()}_filter.wav"
-                val filterPath = "/storage/emulated/0/JamesDSP/Convolver/$filterFile"
+                // Generate filter filename (format matches the asset files)
+                val filterFile = "${targetPhon}-${referencePhon.toInt()}.0_filter.wav"
+                val filterPath = File(getExternalFilesDir(null), "Convolver/$filterFile").absolutePath
                 
                 // Debug: Log filter path
                 Timber.d("LoudnessController: Filter file = $filterFile")
@@ -308,9 +308,10 @@ class LoudnessControllerActivity : BaseActivity() {
                 Timber.d("LoudnessController: EEL file exists = ${eelFile.exists()}")
                 Timber.d("LoudnessController: EEL script content:\n$eelScript")
                 
-                // Generate and save config file
-                val config = generateConfig(currentVolumeDb, targetPhon, referencePhon, finalPreamp, filterPath, eelFile.absolutePath)
+                // Generate and save config file (use relative paths)
+                val config = generateConfig(currentVolumeDb, targetPhon, referencePhon, finalPreamp, filterFile, "Liveprog/$eelFilename")
                 
+                // Save config file to the location watched by ConfigFileWatcher
                 val configDir = File(getExternalFilesDir(null), "JamesDSP")
                 if (!configDir.exists()) {
                     configDir.mkdirs()
@@ -318,6 +319,13 @@ class LoudnessControllerActivity : BaseActivity() {
                 
                 val configFile = File(configDir, "JamesDSP.conf")
                 configFile.writeText(config)
+                
+                // Log config file path for debugging
+                Timber.d("LoudnessController: Config file saved to: ${configFile.absolutePath}")
+                Timber.d("LoudnessController: Config content:\n$config")
+                
+                // Small delay to ensure file is written before ConfigFileWatcher detects it
+                Thread.sleep(200)
                 
                 // Enable master switch first to ensure DSP is running
                 val wasPoweredOn = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
@@ -328,164 +336,40 @@ class LoudnessControllerActivity : BaseActivity() {
                     Thread.sleep(1000) // Give time for DSP to start
                 }
                 
-                // First disable convolver to force reload
-                Timber.d("LoudnessController: Disabling Convolver first")
-                getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE).edit().apply {
-                    putBoolean(getString(R.string.key_convolver_enable), false)
-                    apply()
-                }
-                Thread.sleep(200)
+                // ConfigFileWatcher will automatically detect the config file change and apply settings
+                // No need to manually set SharedPreferences - the config file handles everything
                 
-                // Enable and configure Convolver
-                Timber.d("LoudnessController: Enabling Convolver with filter: $filterPath")
-                getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE).edit().apply {
-                    putBoolean(getString(R.string.key_convolver_enable), true)
-                    putString(getString(R.string.key_convolver_file), filterPath)
-                    apply()
-                }
+                Timber.d("LoudnessController: Waiting for ConfigFileWatcher to process config file...")
+                Thread.sleep(500) // Give ConfigFileWatcher time to detect and process the file
                 
-                // Verify Convolver settings
+                // Verify settings were applied (optional - for debugging)
                 val convolverPrefs = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
                 val convolverEnabled = convolverPrefs.getBoolean(getString(R.string.key_convolver_enable), false)
                 val convolverFile = convolverPrefs.getString(getString(R.string.key_convolver_file), "")
-                Timber.d("LoudnessController: Convolver enabled = $convolverEnabled")
-                Timber.d("LoudnessController: Convolver file = $convolverFile")
+                Timber.d("LoudnessController: After config - Convolver enabled = $convolverEnabled")
+                Timber.d("LoudnessController: After config - Convolver file = $convolverFile")
                 
-                // First disable liveprog to force reload
-                Timber.d("LoudnessController: Disabling Liveprog first")
-                getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE).edit().apply {
-                    putBoolean(getString(R.string.key_liveprog_enable), false)
-                    apply()
-                }
-                Thread.sleep(200)
-                
-                // Enable and configure Liveprog
-                Timber.d("LoudnessController: Enabling Liveprog with script: ${eelFile.absolutePath}")
-                getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE).edit().apply {
-                    putBoolean(getString(R.string.key_liveprog_enable), true)
-                    putString(getString(R.string.key_liveprog_file), eelFile.absolutePath)
-                    apply()
-                }
-                
-                // Verify Liveprog settings
                 val liveprogPrefs = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
                 val liveprogEnabled = liveprogPrefs.getBoolean(getString(R.string.key_liveprog_enable), false)
                 val liveprogFile = liveprogPrefs.getString(getString(R.string.key_liveprog_file), "")
-                Timber.d("LoudnessController: Liveprog enabled = $liveprogEnabled")
-                Timber.d("LoudnessController: Liveprog file = $liveprogFile")
-                
-                // Debug: Check current DSP state before changes
-                val currentPowerState = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
-                Timber.d("LoudnessController: Current DSP power state = $currentPowerState")
+                Timber.d("LoudnessController: After config - Liveprog enabled = $liveprogEnabled")
+                Timber.d("LoudnessController: After config - Liveprog file = $liveprogFile")
                 
                 // Debug: Verify files exist before applying
                 Timber.d("LoudnessController: Verifying files before apply...")
                 Timber.d("LoudnessController: Filter file exists = ${File(filterPath).exists()}")
                 Timber.d("LoudnessController: EEL file exists = ${eelFile.exists()}")
                 
-                // Send broadcast to reload DSP settings
-                Timber.d("LoudnessController: Sending preferences updated broadcast")
-                sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
-                
-                // Force DSP engine reload by toggling power off and on
-                Thread.sleep(200) // Give time for preferences to be written
-                
-                // Debug: Check if preferences were actually saved
-                val savedConvolverFile = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
-                    .getString(getString(R.string.key_convolver_file), "")
-                val savedLiveprogFile = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
-                    .getString(getString(R.string.key_liveprog_file), "")
-                Timber.d("LoudnessController: Saved convolver file = $savedConvolverFile")
-                Timber.d("LoudnessController: Saved liveprog file = $savedLiveprogFile")
-                
-                if (isRootless()) {
-                    // For rootless, stop the service and restart it
-                    Timber.d("LoudnessController: Stopping service (rootless mode)")
-                    RootlessAudioProcessorService.stop(this@LoudnessControllerActivity)
-                    Thread.sleep(500) // Wait for service to stop
-                    
-                    // Debug: Verify service stopped
-                    Timber.d("LoudnessController: Service should be stopped now")
-                    
-                    // Restart the service
-                    Timber.d("LoudnessController: Restarting service (rootless mode)")
-                    app.mediaProjectionStartIntent?.let { startIntent ->
-                        Timber.d("LoudnessController: Media projection intent available, starting service")
-                        RootlessAudioProcessorService.start(this@LoudnessControllerActivity, startIntent)
-                    } ?: run {
-                        Timber.e("LoudnessController: No media projection intent available!")
-                    }
-                    Thread.sleep(1000) // Give more time for service to start
-                    
-                    // Debug: Verify settings after restart
-                    val convolverEnabled2 = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
-                        .getBoolean(getString(R.string.key_convolver_enable), false)
-                    val liveprogEnabled2 = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
-                        .getBoolean(getString(R.string.key_liveprog_enable), false)
-                    Timber.d("LoudnessController: After restart - Convolver enabled = $convolverEnabled2")
-                    Timber.d("LoudnessController: After restart - Liveprog enabled = $liveprogEnabled2")
-                } else if (isRoot()) {
-                    // For root mode, try different approach - send soft reboot first
-                    Timber.d("LoudnessController: Root mode - trying soft reboot first")
-                    sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_SOFT_REBOOT_CORE))
-                    Thread.sleep(500)
-                    
-                    // Now toggle DSP power off and on
-                    Timber.d("LoudnessController: Toggling DSP power off (root mode)")
-                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), false).apply()
-                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
-                    Thread.sleep(1000) // Wait longer for DSP to turn off
-                    
-                    // Debug: Verify DSP is off
-                    val powerOffState = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), true)
-                    Timber.d("LoudnessController: DSP power state after off = $powerOffState")
-                    
-                    Timber.d("LoudnessController: Toggling DSP power on (root mode)")
-                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), true).apply()
-                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
-                    Thread.sleep(1000) // Wait for DSP to turn on
-                    
-                    // Debug: Verify DSP is on
-                    val powerOnState = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
-                    Timber.d("LoudnessController: DSP power state after on = $powerOnState")
-                    
-                    // Send hard reboot for good measure
-                    Timber.d("LoudnessController: Sending hard reboot signal")
-                    sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_HARD_REBOOT_CORE))
-                } else if (isPlugin()) {
-                    // For plugin mode, toggle power
-                    Timber.d("LoudnessController: Toggling DSP power (plugin mode)")
-                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), false).apply()
-                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
-                    Thread.sleep(500)
-                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), true).apply()
-                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
-                }
-                
-                // Extra step: Force reload specific DSP modules
+                // Wait a bit more to ensure ConfigFileWatcher has processed everything
                 Thread.sleep(500)
-                Timber.d("LoudnessController: Force reloading Convolver and Liveprog modules")
                 
-                // Send specific module reload broadcasts
-                val convolverIntent = Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
-                    putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER))
-                }
-                sendLocalBroadcast(convolverIntent)
+                // ConfigFileWatcher handles all the DSP updates automatically
+                // No need for manual service restarts or preference updates
                 
-                Thread.sleep(200)
+                Timber.d("LoudnessController: Settings applied via config file")
                 
-                val liveprogIntent = Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
-                    putExtra("namespaces", arrayOf(Constants.PREF_LIVEPROG))
-                }
-                sendLocalBroadcast(liveprogIntent)
-                
-                // Also try the specific liveprog reload action
-                sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_RELOAD_LIVEPROG))
-                
-                Timber.d("LoudnessController: Settings applied successfully")
-                
-                // Final verification
-                Thread.sleep(500)
+                // Final verification after giving ConfigFileWatcher time to work
+                Thread.sleep(1000)
                 val finalConvolverFile = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
                     .getString(getString(R.string.key_convolver_file), "")
                 val finalLiveprogFile = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
@@ -502,11 +386,12 @@ class LoudnessControllerActivity : BaseActivity() {
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentSystemVolume, 0)
                 
                 withContext(Dispatchers.Main) {
-                    toast(getString(R.string.loudness_applied_success))
+                    // Use application context for toast to prevent activity leak
+                    applicationContext.toast(getString(R.string.loudness_applied_success))
                     updateDisplay()
                     // Show additional debug toast
                     if (BuildConfig.DEBUG) {
-                        toast("DSP engine reloaded - filters should be active now")
+                        applicationContext.toast("DSP engine reloaded - filters should be active now")
                     }
                 }
                 
@@ -522,7 +407,8 @@ class LoudnessControllerActivity : BaseActivity() {
                 }
                 
                 withContext(Dispatchers.Main) {
-                    toast(getString(R.string.loudness_applied_error, e.message))
+                    // Use application context for toast to prevent activity leak
+                    applicationContext.toast(getString(R.string.loudness_applied_error, e.message))
                 }
             }
         }
@@ -541,7 +427,7 @@ spl1 = spl1 * gainLin;
 """
     }
     
-    private fun generateConfig(realVol: Float, target: Float, reference: Float, preamp: Float, filterPath: String, eelPath: String): String {
+    private fun generateConfig(realVol: Float, target: Float, reference: Float, preamp: Float, filterFile: String, eelFile: String): String {
         return """# JamesDSP APO Loudness Auto Configuration
 # Real Volume: $realVol dB SPL
 # Target Phon: $target
@@ -549,10 +435,12 @@ spl1 = spl1 * gainLin;
 # Final Preamp: $preamp dB
 
 # Enable Convolver with the appropriate FIR filter
-Convolver: enabled file="$filterPath"
+Convolver=on
+Convolver.file=Convolver/$filterFile
 
 # Apply preamp gain via Liveprog
-Liveprog: enabled file="$eelPath"
+Liveprog=on
+Liveprog.file=$eelFile
 """
     }
     
