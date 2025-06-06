@@ -1,0 +1,23 @@
+desc: Loudness Gain Control
+
+@init
+listening_level = 60;
+output_gain_db = 0;
+enable = 1;
+gain = 1.0;
+
+@sample
+// Simple gain control
+gain = 10^(output_gain_db/20);
+
+enable > 0.5 ? (
+  // Calculate compensation based on listening level
+  compensation = (83 - listening_level) * 0.1;
+  compensation = max(-6, min(6, compensation));
+  
+  // Apply gain with compensation
+  total_gain = gain * 10^(compensation/20);
+  
+  spl0 = spl0 * total_gain;
+  spl1 = spl1 * total_gain;
+);

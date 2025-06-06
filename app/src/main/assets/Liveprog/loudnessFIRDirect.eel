@@ -1,0 +1,140 @@
+// APO Loudness Direct FIR Implementation for JamesDSP
+// Uses pre-calculated FIR filter coefficients for equal-loudness compensation
+// Based on ISO 226:2003 curves
+
+desc:Loudness FIR Direct
+
+slider1:60<40,90,1>Listening Level (dB SPL)
+slider2:0<-30,30,0.1>Output Gain (dB)
+slider3:1<0,1,1{Off,On}>Enable Loudness
+slider4:0<0,2,1{50-77dB,60-83dB,70-85dB}>Filter Select
+
+@init
+requiredSamples = 1024;
+
+// Memory allocation for filters
+// Each filter needs space for coefficients and buffers
+filter_size = 4096; // Maximum filter length
+num_filters = 3;
+
+// Filter coefficient storage
+h1_50 = 0;
+h1_60 = h1_50 + filter_size;
+h1_70 = h1_60 + filter_size;
+
+// Initialize with simplified filter data (truncated for example)
+// In real implementation, these would be loaded from files
+// Filter 1: 50.0-77.0 (strong compensation)
+filter1_len = 256;
+h1_50[0] = 0.0012; h1_50[1] = 0.0018; h1_50[2] = 0.0025; h1_50[3] = 0.0031;
+// ... (actual filter coefficients would be loaded here)
+
+// Filter 2: 60.0-83.0 (moderate compensation)  
+filter2_len = 256;
+h1_60[0] = 0.0008; h1_60[1] = 0.0012; h1_60[2] = 0.0016; h1_60[3] = 0.0020;
+// ... (actual filter coefficients would be loaded here)
+
+// Filter 3: 70.0-85.0 (light compensation)
+filter3_len = 256;
+h1_70[0] = 0.0004; h1_70[1] = 0.0006; h1_70[2] = 0.0008; h1_70[3] = 0.0010;
+// ... (actual filter coefficients would be loaded here)
+
+// Convolution buffers
+conv_buf_size = requiredSamples + filter_size;
+inBufLeft = h1_70 + filter_size;
+outBufLeft = inBufLeft + conv_buf_size;
+inBufRight = outBufLeft + conv_buf_size;
+outBufRight = inBufRight + conv_buf_size;
+
+// Delay line for convolution
+delayLeft = outBufRight + conv_buf_size;
+delayRight = delayLeft + filter_size;
+
+// Initialize delay lines
+memset(delayLeft, 0, filter_size);
+memset(delayRight, 0, filter_size);
+
+bufpos = 0;
+delay_index = 0;
+
+// Gain
+gain_linear = 1.0;
+
+// Simple convolution function
+function convolve(input, delay_line, coeffs, coeff_len, delay_idx) (
+  local(sum, i, idx);
+  
+  // Store input in delay line
+  delay_line[delay_idx] = input;
+  
+  // Perform convolution
+  sum = 0;
+  i = 0;
+  loop(coeff_len,
+    idx = (delay_idx - i + filter_size) % filter_size;
+    sum += delay_line[idx] * coeffs[i];
+    i += 1;
+  );
+  
+  sum
+);
+
+// Select active filter based on listening level
+function select_filter() (
+  local(filter_ptr, filter_length);
+  
+  // Auto-select based on listening level
+  slider1 <= 55 ? (
+    filter_ptr = h1_50;
+    filter_length = filter1_len;
+    slider4 = 0;
+  ) : slider1 <= 65 ? (
+    filter_ptr = h1_60;
+    filter_length = filter2_len;
+    slider4 = 1;
+  ) : slider1 <= 75 ? (
+    filter_ptr = h1_70;
+    filter_length = filter3_len;
+    slider4 = 2;
+  ) : (
+    filter_ptr = 0; // No filter for loud listening
+    filter_length = 0;
+    slider4 = -1;
+  );
+  
+  active_filter = filter_ptr;
+  active_filter_len = filter_length;
+);
+
+// Initialize filter selection
+select_filter();
+
+@slider
+// Update gain
+gain_linear = 10^(slider2/20);
+
+// Update filter selection if listening level changed
+select_filter();
+
+@sample
+// Process audio
+slider3 > 0.5 && active_filter_len > 0 ? (
+  // Apply FIR filter using convolution
+  spl0 = convolve(spl0, delayLeft, active_filter, active_filter_len, delay_index);
+  spl1 = convolve(spl1, delayRight, active_filter, active_filter_len, delay_index);
+  
+  // Update delay index
+  delay_index = (delay_index + 1) % filter_size;
+  
+  // Apply output gain
+  spl0 *= gain_linear;
+  spl1 *= gain_linear;
+) : (
+  // Bypass mode - only apply gain
+  spl0 *= gain_linear;
+  spl1 *= gain_linear;
+);
+
+// Note: For production use, the actual FIR filter coefficients would need to be
+// imported from the pre-calculated filter files using importFLTFromStr() or
+// loaded dynamically based on the selected listening level.

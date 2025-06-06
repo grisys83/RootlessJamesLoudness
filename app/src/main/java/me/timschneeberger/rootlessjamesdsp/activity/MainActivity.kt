@@ -252,6 +252,10 @@ class MainActivity : BaseActivity() {
                     }
                     true
                 }
+                R.id.action_loudness_controller -> {
+                    startActivity(Intent(this, LoudnessControllerActivity::class.java))
+                    true
+                }
                 else -> false
             }
         }

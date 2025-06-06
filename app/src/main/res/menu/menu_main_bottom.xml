@@ -25,4 +25,12 @@
         android:icon="@drawable/ic_twotone_app_blocking_24dp"
         app:showAsAction="never" />
 
+    <item
+        android:id="@+id/action_loudness_controller"
+        android:orderInCategory="100"
+        android:title="@string/action_loudness_controller"
+        android:iconTint="?attr/actionMenuTextColor"
+        android:icon="@drawable/ic_baseline_equalizer_24dp"
+        app:showAsAction="never" />
+
 </menu>

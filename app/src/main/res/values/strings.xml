@@ -6,6 +6,7 @@
     <string name="action_presets">Presets</string>
     <string name="action_revert">Reset to defaults</string>
     <string name="action_blocked_apps">Excluded apps</string>
+    <string name="action_loudness_controller">Loudness Controller</string>
 
     <!-- Notification channels -->
     <string name="notification_group_service">Service</string>
@@ -664,4 +665,23 @@ Tap on \'Tutorial\' below for detailed instructions.</string>
     <string name="android_15_screenshare_keyguard_warning">Android 15 introduces a restriction that stops screen sharing when the device is locked. To workaround this issue, the \'PROJECT_MEDIA\' permission must be granted using Shizuku or ADB.
 
 Please press \'Continue\' below to re-do the setup wizard.</string>
+
+    <!-- Loudness Controller -->
+    <string name="loudness_controller_title">Loudness Controller</string>
+    <string name="loudness_real_volume_title">Real Volume</string>
+    <string name="loudness_settings_title">Current Settings</string>
+    <string name="loudness_target_label">Target Phon</string>
+    <string name="loudness_reference_label">Reference Phon</string>
+    <string name="loudness_preamp_label">Preamp</string>
+    <string name="loudness_volume_format">%.1f dB SPL</string>
+    <string name="loudness_target_format">%.1f phon</string>
+    <string name="loudness_reference_format">%d phon</string>
+    <string name="loudness_preamp_format">%.2f dB</string>
+    <string name="loudness_apply">Apply</string>
+    <string name="loudness_status_active">Loudness compensation active</string>
+    <string name="loudness_status_inactive">Loudness compensation inactive</string>
+    <string name="loudness_info_text">Adjust the real volume slider to set your listening level. The system will automatically calculate optimal loudness compensation based on equal-loudness contours.</string>
+    <string name="loudness_applied_success">Loudness compensation applied successfully</string>
+    <string name="loudness_applied_error">Failed to apply loudness compensation: %s</string>
+    <string name="loudness_reference_dialog_title">Select Reference Level</string>
 </resources>

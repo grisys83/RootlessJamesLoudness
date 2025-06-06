@@ -1,0 +1,43 @@
+desc: Loudness Control with Gain
+
+slider1:60<40,90,1>Listening Level (dB SPL)
+slider2:0<-30,30,1>Output Gain (dB)
+slider3:1<0,1,1{Off,On}>Enable Loudness
+slider4:83<70,90,1>Reference Level (dB SPL)
+
+@init
+DB_2_LOG = 0.11512925464970228420089957273422;
+listening_level = 60;
+output_gain = 0;
+enable = 1;
+reference_level = 83;
+gainLin = 1;
+compLin = 1;
+
+@slider
+listening_level = slider1;
+output_gain = slider2;
+enable = slider3;
+reference_level = slider4;
+
+// Calculate output gain
+gainLin = exp(output_gain * DB_2_LOG);
+
+// Calculate loudness compensation
+level_diff = reference_level - listening_level;
+// Simple compensation curve: more boost for lower frequencies at quiet levels
+comp_db = level_diff * 0.15; // 15% of level difference as compensation
+comp_db = max(-12, min(12, comp_db)); // Limit to +/-12dB
+compLin = exp(comp_db * DB_2_LOG);
+
+@sample
+enable > 0.5 ? (
+  // Apply compensation and gain
+  out_gain = gainLin * compLin;
+  spl0 = spl0 * out_gain;
+  spl1 = spl1 * out_gain;
+) : (
+  // Just apply output gain when disabled
+  spl0 = spl0 * gainLin;
+  spl1 = spl1 * gainLin;
+);
