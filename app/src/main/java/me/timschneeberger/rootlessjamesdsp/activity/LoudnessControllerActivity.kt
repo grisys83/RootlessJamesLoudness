@@ -1,6 +1,8 @@
 package me.timschneeberger.rootlessjamesdsp.activity
 
+import android.content.Context
 import android.content.Intent
+import android.media.AudioManager
 import android.os.Bundle
 import android.widget.SeekBar
 import android.widget.Toast
@@ -15,6 +17,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import me.timschneeberger.rootlessjamesdsp.BuildConfig
 import me.timschneeberger.rootlessjamesdsp.R
 import me.timschneeberger.rootlessjamesdsp.service.RootlessAudioProcessorService
 import me.timschneeberger.rootlessjamesdsp.service.RootAudioProcessorService
@@ -23,6 +26,7 @@ import me.timschneeberger.rootlessjamesdsp.utils.extensions.ContextExtensions.se
 import me.timschneeberger.rootlessjamesdsp.utils.extensions.ContextExtensions.toast
 import me.timschneeberger.rootlessjamesdsp.utils.isRootless
 import me.timschneeberger.rootlessjamesdsp.utils.isRoot
+import me.timschneeberger.rootlessjamesdsp.utils.isPlugin
 import timber.log.Timber
 import java.io.File
 import kotlin.math.abs
@@ -35,20 +39,23 @@ class LoudnessControllerActivity : BaseActivity() {
     companion object {
         // Volume range constants
         const val MIN_VOLUME_DB = 40.0f
-        const val MAX_VOLUME_DB = 96.0f
-        const val DEFAULT_VOLUME_DB = 66.0f
+        const val MAX_VOLUME_DB = 106.0f  // Updated to 106 dB max
+        const val DEFAULT_VOLUME_DB = 70.0f  // Adjusted default for new range
         
         // Default reference level  
         const val DEFAULT_REFERENCE_PHON = 80.0f
         
         // Measured real dB SPL values (from optimaloffsetcalculator.cpp)
+        // Extended to include higher volumes
         private val measuredDbSpl = mapOf(
             40.0f to 59.3f,
             50.0f to 65.4f,
             60.0f to 71.8f,
             70.0f to 77.7f,
             80.0f to 83.0f,
-            90.0f to 88.3f
+            90.0f to 88.3f,
+            100.0f to 93.3f,  // Extrapolated values
+            106.0f to 96.3f   // for higher volumes
         )
         
         // Preamp lookup table
@@ -77,9 +84,15 @@ class LoudnessControllerActivity : BaseActivity() {
     private var referencePhon = DEFAULT_REFERENCE_PHON
     private var finalPreamp = 0.0f
     
+    // Audio manager for volume control
+    private lateinit var audioManager: AudioManager
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_loudness_controller)
+        
+        // Initialize AudioManager
+        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         
         initializeViews()
         setupToolbar()
@@ -144,14 +157,24 @@ class LoudnessControllerActivity : BaseActivity() {
     
     private fun updateDisplay() {
         // Determine target and reference based on real volume
-        if (currentVolumeDb < 80) {
-            targetPhon = currentVolumeDb
-            // Keep current reference phon
-        } else {
-            // For volumes >= 80dB, use same value for both
-            val availableRefs = listOf(75f, 80f, 85f, 90f)
-            referencePhon = availableRefs.minByOrNull { abs(it - currentVolumeDb) } ?: 80f
-            targetPhon = currentVolumeDb
+        when {
+            currentVolumeDb < 80 -> {
+                // For volumes below 80dB, target matches volume
+                targetPhon = currentVolumeDb
+                // Keep current reference phon
+            }
+            currentVolumeDb in 80f..90f -> {
+                // For volumes 80-90dB, both target and reference are close
+                targetPhon = currentVolumeDb
+                val availableRefs = listOf(75f, 80f, 85f, 90f)
+                referencePhon = availableRefs.minByOrNull { abs(it - currentVolumeDb) } ?: 80f
+            }
+            else -> {
+                // For volumes above 90dB, cap target at 90 phon
+                // but adjust preamp to compensate for actual volume
+                targetPhon = 90.0f
+                referencePhon = 90.0f
+            }
         }
         
         // Ensure values are in valid range
@@ -164,7 +187,18 @@ class LoudnessControllerActivity : BaseActivity() {
         // Calculate preamp
         val basePreamp = getPreamp(targetPhon, referencePhon)
         val optimalOffset = findOptimalOffset(targetPhon, basePreamp, currentVolumeDb)
-        finalPreamp = basePreamp + optimalOffset
+        
+        // For volumes above 90dB, add extra compensation
+        val volumeCompensation = if (currentVolumeDb > 90) {
+            // Add compensation for volumes above 90dB
+            // Each 10dB above 90 requires about 3-4dB less gain
+            val excessVolume = currentVolumeDb - 90f
+            (excessVolume * 0.35f)  // 0.35 factor for gradual compensation
+        } else {
+            0f
+        }
+        
+        finalPreamp = basePreamp + optimalOffset + volumeCompensation
         
         // Update UI
         volumeText.text = getString(R.string.loudness_volume_format, currentVolumeDb)
@@ -225,7 +259,19 @@ class LoudnessControllerActivity : BaseActivity() {
     
     private fun applyLoudnessSettings() {
         CoroutineScope(Dispatchers.IO).launch {
+            // Save current volume level before muting (declare outside try block for access in catch)
+            val currentSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+            
             try {
+                
+                // Mute system volume to prevent loud transients during DSP restart
+                Timber.d("LoudnessController: Muting system volume before applying changes")
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+                
+                // Small delay to ensure volume is muted
+                Thread.sleep(100)
+                
                 // Save current settings
                 prefsVar.preferences.edit().apply {
                     putFloat("loudness_real_volume_db", currentVolumeDb)
@@ -235,11 +281,14 @@ class LoudnessControllerActivity : BaseActivity() {
                 
                 // Generate filter filename
                 val filterFile = "${targetPhon}-${referencePhon.toInt()}_filter.wav"
-                val appConvolverDir = File(this@LoudnessControllerActivity.getExternalFilesDir(null), "Convolver")
-                if (!appConvolverDir.exists()) {
-                    appConvolverDir.mkdirs()
-                }
-                val filterPath = File(appConvolverDir, filterFile).absolutePath
+                val filterPath = "/storage/emulated/0/JamesDSP/Convolver/$filterFile"
+                
+                // Debug: Log filter path
+                Timber.d("LoudnessController: Filter file = $filterFile")
+                Timber.d("LoudnessController: Filter path = $filterPath")
+                Timber.d("LoudnessController: Checking if filter exists...")
+                val filterFileObj = File(filterPath)
+                Timber.d("LoudnessController: Filter exists = ${filterFileObj.exists()}")
                 
                 // Generate EEL script
                 val eelScript = generateEelScript(finalPreamp)
@@ -254,6 +303,11 @@ class LoudnessControllerActivity : BaseActivity() {
                 val eelFile = File(liveprogDir, eelFilename)
                 eelFile.writeText(eelScript)
                 
+                // Debug: Log EEL file
+                Timber.d("LoudnessController: EEL file = ${eelFile.absolutePath}")
+                Timber.d("LoudnessController: EEL file exists = ${eelFile.exists()}")
+                Timber.d("LoudnessController: EEL script content:\n$eelScript")
+                
                 // Generate and save config file
                 val config = generateConfig(currentVolumeDb, targetPhon, referencePhon, finalPreamp, filterPath, eelFile.absolutePath)
                 
@@ -265,44 +319,208 @@ class LoudnessControllerActivity : BaseActivity() {
                 val configFile = File(configDir, "JamesDSP.conf")
                 configFile.writeText(config)
                 
-                // Enable master switch
-                prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), true).apply()
+                // Enable master switch first to ensure DSP is running
+                val wasPoweredOn = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
+                if (!wasPoweredOn) {
+                    Timber.d("LoudnessController: DSP was off, turning on first")
+                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), true).apply()
+                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
+                    Thread.sleep(1000) // Give time for DSP to start
+                }
+                
+                // First disable convolver to force reload
+                Timber.d("LoudnessController: Disabling Convolver first")
+                getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE).edit().apply {
+                    putBoolean(getString(R.string.key_convolver_enable), false)
+                    apply()
+                }
+                Thread.sleep(200)
                 
                 // Enable and configure Convolver
+                Timber.d("LoudnessController: Enabling Convolver with filter: $filterPath")
                 getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE).edit().apply {
                     putBoolean(getString(R.string.key_convolver_enable), true)
                     putString(getString(R.string.key_convolver_file), filterPath)
                     apply()
                 }
                 
+                // Verify Convolver settings
+                val convolverPrefs = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
+                val convolverEnabled = convolverPrefs.getBoolean(getString(R.string.key_convolver_enable), false)
+                val convolverFile = convolverPrefs.getString(getString(R.string.key_convolver_file), "")
+                Timber.d("LoudnessController: Convolver enabled = $convolverEnabled")
+                Timber.d("LoudnessController: Convolver file = $convolverFile")
+                
+                // First disable liveprog to force reload
+                Timber.d("LoudnessController: Disabling Liveprog first")
+                getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE).edit().apply {
+                    putBoolean(getString(R.string.key_liveprog_enable), false)
+                    apply()
+                }
+                Thread.sleep(200)
+                
                 // Enable and configure Liveprog
+                Timber.d("LoudnessController: Enabling Liveprog with script: ${eelFile.absolutePath}")
                 getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE).edit().apply {
                     putBoolean(getString(R.string.key_liveprog_enable), true)
                     putString(getString(R.string.key_liveprog_file), eelFile.absolutePath)
                     apply()
                 }
                 
+                // Verify Liveprog settings
+                val liveprogPrefs = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
+                val liveprogEnabled = liveprogPrefs.getBoolean(getString(R.string.key_liveprog_enable), false)
+                val liveprogFile = liveprogPrefs.getString(getString(R.string.key_liveprog_file), "")
+                Timber.d("LoudnessController: Liveprog enabled = $liveprogEnabled")
+                Timber.d("LoudnessController: Liveprog file = $liveprogFile")
+                
+                // Debug: Check current DSP state before changes
+                val currentPowerState = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
+                Timber.d("LoudnessController: Current DSP power state = $currentPowerState")
+                
+                // Debug: Verify files exist before applying
+                Timber.d("LoudnessController: Verifying files before apply...")
+                Timber.d("LoudnessController: Filter file exists = ${File(filterPath).exists()}")
+                Timber.d("LoudnessController: EEL file exists = ${eelFile.exists()}")
+                
                 // Send broadcast to reload DSP settings
+                Timber.d("LoudnessController: Sending preferences updated broadcast")
                 sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
                 
-                // Force service to reload
+                // Force DSP engine reload by toggling power off and on
                 Thread.sleep(200) // Give time for preferences to be written
                 
+                // Debug: Check if preferences were actually saved
+                val savedConvolverFile = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
+                    .getString(getString(R.string.key_convolver_file), "")
+                val savedLiveprogFile = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
+                    .getString(getString(R.string.key_liveprog_file), "")
+                Timber.d("LoudnessController: Saved convolver file = $savedConvolverFile")
+                Timber.d("LoudnessController: Saved liveprog file = $savedLiveprogFile")
+                
                 if (isRootless()) {
-                    // Send hard reboot signal to force reload
-                    sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_HARD_REBOOT_CORE))
+                    // For rootless, stop the service and restart it
+                    Timber.d("LoudnessController: Stopping service (rootless mode)")
+                    RootlessAudioProcessorService.stop(this@LoudnessControllerActivity)
+                    Thread.sleep(500) // Wait for service to stop
+                    
+                    // Debug: Verify service stopped
+                    Timber.d("LoudnessController: Service should be stopped now")
+                    
+                    // Restart the service
+                    Timber.d("LoudnessController: Restarting service (rootless mode)")
+                    app.mediaProjectionStartIntent?.let { startIntent ->
+                        Timber.d("LoudnessController: Media projection intent available, starting service")
+                        RootlessAudioProcessorService.start(this@LoudnessControllerActivity, startIntent)
+                    } ?: run {
+                        Timber.e("LoudnessController: No media projection intent available!")
+                    }
+                    Thread.sleep(1000) // Give more time for service to start
+                    
+                    // Debug: Verify settings after restart
+                    val convolverEnabled2 = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
+                        .getBoolean(getString(R.string.key_convolver_enable), false)
+                    val liveprogEnabled2 = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
+                        .getBoolean(getString(R.string.key_liveprog_enable), false)
+                    Timber.d("LoudnessController: After restart - Convolver enabled = $convolverEnabled2")
+                    Timber.d("LoudnessController: After restart - Liveprog enabled = $liveprogEnabled2")
                 } else if (isRoot()) {
-                    // For root mode, also send hard reboot
+                    // For root mode, try different approach - send soft reboot first
+                    Timber.d("LoudnessController: Root mode - trying soft reboot first")
+                    sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_SOFT_REBOOT_CORE))
+                    Thread.sleep(500)
+                    
+                    // Now toggle DSP power off and on
+                    Timber.d("LoudnessController: Toggling DSP power off (root mode)")
+                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), false).apply()
+                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
+                    Thread.sleep(1000) // Wait longer for DSP to turn off
+                    
+                    // Debug: Verify DSP is off
+                    val powerOffState = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), true)
+                    Timber.d("LoudnessController: DSP power state after off = $powerOffState")
+                    
+                    Timber.d("LoudnessController: Toggling DSP power on (root mode)")
+                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), true).apply()
+                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
+                    Thread.sleep(1000) // Wait for DSP to turn on
+                    
+                    // Debug: Verify DSP is on
+                    val powerOnState = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
+                    Timber.d("LoudnessController: DSP power state after on = $powerOnState")
+                    
+                    // Send hard reboot for good measure
+                    Timber.d("LoudnessController: Sending hard reboot signal")
                     sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_HARD_REBOOT_CORE))
+                } else if (isPlugin()) {
+                    // For plugin mode, toggle power
+                    Timber.d("LoudnessController: Toggling DSP power (plugin mode)")
+                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), false).apply()
+                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
+                    Thread.sleep(500)
+                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), true).apply()
+                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
                 }
+                
+                // Extra step: Force reload specific DSP modules
+                Thread.sleep(500)
+                Timber.d("LoudnessController: Force reloading Convolver and Liveprog modules")
+                
+                // Send specific module reload broadcasts
+                val convolverIntent = Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+                    putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER))
+                }
+                sendLocalBroadcast(convolverIntent)
+                
+                Thread.sleep(200)
+                
+                val liveprogIntent = Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+                    putExtra("namespaces", arrayOf(Constants.PREF_LIVEPROG))
+                }
+                sendLocalBroadcast(liveprogIntent)
+                
+                // Also try the specific liveprog reload action
+                sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_RELOAD_LIVEPROG))
+                
+                Timber.d("LoudnessController: Settings applied successfully")
+                
+                // Final verification
+                Thread.sleep(500)
+                val finalConvolverFile = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
+                    .getString(getString(R.string.key_convolver_file), "")
+                val finalLiveprogFile = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
+                    .getString(getString(R.string.key_liveprog_file), "")
+                Timber.d("LoudnessController: Final verification - Convolver = $finalConvolverFile")
+                Timber.d("LoudnessController: Final verification - Liveprog = $finalLiveprogFile")
+                
+                // Wait 5 seconds to ensure DSP is fully initialized and stable
+                Timber.d("LoudnessController: Waiting 5 seconds for DSP to stabilize...")
+                Thread.sleep(5000)
+                
+                // Restore volume to original level
+                Timber.d("LoudnessController: Restoring system volume to original level: $currentSystemVolume")
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentSystemVolume, 0)
                 
                 withContext(Dispatchers.Main) {
                     toast(getString(R.string.loudness_applied_success))
                     updateDisplay()
+                    // Show additional debug toast
+                    if (BuildConfig.DEBUG) {
+                        toast("DSP engine reloaded - filters should be active now")
+                    }
                 }
                 
             } catch (e: Exception) {
                 Timber.e(e, "Error applying loudness settings")
+                
+                // Restore original volume in case of error
+                try {
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentSystemVolume, 0)
+                    Timber.d("LoudnessController: Restored volume to original level after error")
+                } catch (volumeError: Exception) {
+                    Timber.e(volumeError, "Error restoring volume after failure")
+                }
+                
                 withContext(Dispatchers.Main) {
                     toast(getString(R.string.loudness_applied_error, e.message))
                 }

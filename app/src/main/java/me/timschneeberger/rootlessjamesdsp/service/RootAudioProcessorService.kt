@@ -26,6 +26,7 @@ import me.timschneeberger.rootlessjamesdsp.model.room.AppBlocklistRepository
 import me.timschneeberger.rootlessjamesdsp.model.room.BlockedApp
 import me.timschneeberger.rootlessjamesdsp.session.root.OnRootSessionChangeListener
 import me.timschneeberger.rootlessjamesdsp.session.root.RootSessionDumpManager
+import me.timschneeberger.rootlessjamesdsp.utils.ConfigFileWatcher
 import me.timschneeberger.rootlessjamesdsp.utils.Constants
 import me.timschneeberger.rootlessjamesdsp.utils.extensions.ContextExtensions.sendLocalBroadcast
 import me.timschneeberger.rootlessjamesdsp.utils.notifications.Notifications
@@ -48,6 +49,9 @@ class RootAudioProcessorService : BaseAudioProcessorService(), KoinComponent,
 
     // Enhanced processing
     private var sessionDumpManager: RootSessionDumpManager? = null
+    
+    // Config file watcher
+    private var configFileWatcher: ConfigFileWatcher? = null
 
     // Preferences
     private val preferences: Preferences.App by inject()
@@ -87,6 +91,10 @@ class RootAudioProcessorService : BaseAudioProcessorService(), KoinComponent,
 
         // Setup database observer
         blockedApps.observeForever(blockedAppObserver)
+        
+        // Setup config file watcher
+        configFileWatcher = ConfigFileWatcher(this)
+        configFileWatcher?.startWatching()
 
         // Launch foreground service
         val notification = if (app.isLegacyMode)
@@ -173,6 +181,10 @@ class RootAudioProcessorService : BaseAudioProcessorService(), KoinComponent,
 
         // Unregister database observer
         blockedApps.removeObserver(blockedAppObserver)
+        
+        // Stop config file watcher
+        configFileWatcher?.stopWatching()
+        configFileWatcher = null
 
         // Notify app about service termination and unregister
         sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_STOPPED))

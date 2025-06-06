@@ -148,6 +148,7 @@ android {
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
         // Disable unused features
         aidl = false
         renderScript = false

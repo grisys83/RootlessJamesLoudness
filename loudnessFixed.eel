@@ -1,0 +1,21 @@
+desc: Loudness Fixed
+
+slider1:0<-30,30,1>Gain (dB)
+slider2:60<40,90,1>Listening Level
+slider3:100<0,100,1>Compensation (%)
+
+@init
+DB_2_LOG = 0.11512925464970228420089957273422;
+
+@slider
+gainLin = exp(slider1 * DB_2_LOG);
+levelDiff = 83 - slider2;
+compDB = levelDiff * 0.15 * (slider3 / 100);
+compDB > 12 ? compDB = 12;
+compDB < -12 ? compDB = -12;
+compGain = exp(compDB * DB_2_LOG);
+totalGain = gainLin * compGain;
+
+@sample
+spl0 = spl0 * totalGain;
+spl1 = spl1 * totalGain;

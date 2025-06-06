@@ -1,0 +1,7 @@
+<RCC>
+    <qresource prefix="/">
+        <file>microphone_color.svg</file>
+        <file>microphone_modern.svg</file>
+        <file>microphone.svg</file>
+    </qresource>
+</RCC>

@@ -43,6 +43,7 @@ import me.timschneeberger.rootlessjamesdsp.session.rootless.OnRootlessSessionCha
 import me.timschneeberger.rootlessjamesdsp.session.rootless.RootlessSessionDatabase
 import me.timschneeberger.rootlessjamesdsp.session.rootless.RootlessSessionManager
 import me.timschneeberger.rootlessjamesdsp.session.rootless.SessionRecordingPolicyManager
+import me.timschneeberger.rootlessjamesdsp.utils.ConfigFileWatcher
 import me.timschneeberger.rootlessjamesdsp.utils.Constants
 import me.timschneeberger.rootlessjamesdsp.utils.Constants.ACTION_PREFERENCES_UPDATED
 import me.timschneeberger.rootlessjamesdsp.utils.Constants.ACTION_SAMPLE_RATE_UPDATED
@@ -81,6 +82,9 @@ class RootlessAudioProcessorService : BaseAudioProcessorService() {
     private lateinit var engine: JamesDspLocalEngine
     private val isRunning: Boolean
         get() = recorderThread != null
+    
+    // Config file watcher
+    private var configFileWatcher: ConfigFileWatcher? = null
 
     // Session management
     private lateinit var sessionManager: RootlessSessionManager
@@ -147,6 +151,10 @@ class RootlessAudioProcessorService : BaseAudioProcessorService() {
 
         // Setup database observer
         blockedApps.observeForever(blockedAppObserver)
+        
+        // Setup config file watcher
+        configFileWatcher = ConfigFileWatcher(this)
+        configFileWatcher?.startWatching()
 
         notificationManager.cancel(Notifications.ID_SERVICE_STARTUP)
 
@@ -244,6 +252,10 @@ class RootlessAudioProcessorService : BaseAudioProcessorService() {
 
         preferences.unregisterOnSharedPreferenceChangeListener(preferencesListener)
         notificationManager.cancel(Notifications.ID_SERVICE_STATUS)
+        
+        // Stop config file watcher
+        configFileWatcher?.stopWatching()
+        configFileWatcher = null
 
         stopSelf()
         super.onDestroy()
@@ -284,7 +296,14 @@ class RootlessAudioProcessorService : BaseAudioProcessorService() {
         override fun onReceive(context: Context, intent: Intent) {
             when (intent.action) {
                 ACTION_SAMPLE_RATE_UPDATED -> engine.syncWithPreferences(arrayOf(Constants.PREF_CONVOLVER))
-                ACTION_PREFERENCES_UPDATED -> engine.syncWithPreferences()
+                ACTION_PREFERENCES_UPDATED -> {
+                    val namespaces = intent.getStringArrayExtra("namespaces")
+                    if (namespaces != null) {
+                        engine.syncWithPreferences(namespaces)
+                    } else {
+                        engine.syncWithPreferences()
+                    }
+                }
                 ACTION_SERVICE_RELOAD_LIVEPROG -> engine.syncWithPreferences(arrayOf(Constants.PREF_LIVEPROG))
                 ACTION_SERVICE_HARD_REBOOT_CORE -> restartRecording()
                 ACTION_SERVICE_SOFT_REBOOT_CORE -> requestAudioRecordRecreation()

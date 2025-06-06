@@ -1,0 +1,28 @@
+desc: APO Loudness Filter Selector
+
+@init
+// Constants
+DB_2_LOG = 0.11512925464970228420089957273422;
+
+// Configuration - modify these values to change filter selection
+listeningLevel = 80.0;  // Range: 40.0 to 90.0 in 0.1 steps
+referenceLevel = 85.0;  // Range: 75.0 to 90.0 in 1.0 steps
+
+// Preamp value for 80.0 listening level at 85.0 reference
+// You need to look up the correct value from preamp_data_v032.h
+preampDB = -5.71;  // Example value, replace with actual from table
+
+// Convert preamp from dB to linear
+preampLin = exp(preampDB * DB_2_LOG);
+
+// Build filter filename
+// Format: "listeningLevel-referenceLevel_filter.wav"
+// Example: "80.0-85.0_filter.wav"
+
+@sample
+// Apply preamp gain
+spl0 = spl0 * preampLin;
+spl1 = spl1 * preampLin;
+
+// Note: The actual FIR filter convolution would need to be loaded
+// through the Convolver effect in JamesDSP, not directly in EEL

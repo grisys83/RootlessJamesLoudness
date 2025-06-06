@@ -1,0 +1,14 @@
+desc: Loudness 60dB Listening
+
+@init
+DB_2_LOG = 0.11512925464970228420089957273422;
+// 60dB listening -> 83dB reference = 23dB difference
+// Apply 15% compensation = 3.45dB boost
+compGain = exp(3.45 * DB_2_LOG);
+// With -10dB output for safety
+outputGain = exp(-10 * DB_2_LOG);
+totalGain = compGain * outputGain;
+
+@sample
+spl0 = spl0 * totalGain;
+spl1 = spl1 * totalGain;

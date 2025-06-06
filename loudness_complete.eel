@@ -1,0 +1,67 @@
+desc: APO Loudness Complete Example
+
+@init
+DB_2_LOG = 0.11512925464970228420089957273422;
+
+// === CONFIGURATION ===
+// Modify these values to select different filter and preamp
+listeningLevel = 80.0;  // Your target listening level (40.0-90.0)
+referenceLevel = 85.0;  // Reference level (75.0-90.0)
+
+// === PREAMP LOOKUP TABLE ===
+// Simplified table for reference level 85.0
+// For other reference levels, update these values from preamp_data_v032.h
+
+// Initialize preamp based on listening level
+preampDB = 0;
+
+// Preamp values for reference level 85.0
+listeningLevel < 45 ? (
+    // 40-45 phon range
+    preampDB = -30.18 + (listeningLevel - 40.0) * ((-27.95 + 30.18) / 5.0);
+) : listeningLevel < 50 ? (
+    // 45-50 phon range  
+    preampDB = -27.95 + (listeningLevel - 45.0) * ((-25.72 + 27.95) / 5.0);
+) : listeningLevel < 55 ? (
+    // 50-55 phon range
+    preampDB = -25.72 + (listeningLevel - 50.0) * ((-23.56 + 25.72) / 5.0);
+) : listeningLevel < 60 ? (
+    // 55-60 phon range
+    preampDB = -23.56 + (listeningLevel - 55.0) * ((-21.40 + 23.56) / 5.0);
+) : listeningLevel < 65 ? (
+    // 60-65 phon range
+    preampDB = -21.40 + (listeningLevel - 60.0) * ((-19.10 + 21.40) / 5.0);
+) : listeningLevel < 70 ? (
+    // 65-70 phon range
+    preampDB = -19.10 + (listeningLevel - 65.0) * ((-16.79 + 19.10) / 5.0);
+) : listeningLevel < 75 ? (
+    // 70-75 phon range
+    preampDB = -16.79 + (listeningLevel - 70.0) * ((-14.08 + 16.79) / 5.0);
+) : listeningLevel < 80 ? (
+    // 75-80 phon range
+    preampDB = -14.08 + (listeningLevel - 75.0) * ((-11.36 + 14.08) / 5.0);
+) : listeningLevel < 85 ? (
+    // 80-85 phon range
+    preampDB = -11.36 + (listeningLevel - 80.0) * ((-8.64 + 11.36) / 5.0);
+) : listeningLevel < 90 ? (
+    // 85-90 phon range
+    preampDB = -8.64 + (listeningLevel - 85.0) * ((-5.92 + 8.64) / 5.0);
+) : (
+    // 90 phon
+    preampDB = -5.92;
+);
+
+// Convert to linear gain
+preampLin = exp(preampDB * DB_2_LOG);
+
+// Display values (for debugging - remove in production)
+// filterName would be: listeningLevel-referenceLevel_filter.wav
+// Example: 80.0-85.0_filter.wav
+
+@sample
+// Apply preamp compensation
+spl0 = spl0 * preampLin;
+spl1 = spl1 * preampLin;
+
+// NOTE: The actual FIR filter must be loaded through JamesDSP's Convolver
+// This EEL script only handles the preamp gain compensation

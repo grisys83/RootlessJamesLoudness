@@ -1,0 +1,3 @@
+# Loudness Test - Simple EQ version  
+Liveprog: enabled file=\Liveprog/loudnessSimpleEQ.eel\  
+Output.gain=0.0  
