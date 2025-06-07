@@ -154,9 +154,21 @@ class LoudnessControllerActivity : BaseActivity() {
                     updateReferenceSliderRange()
                     
                     updateDisplay()
-                    scheduleAutoApply()
+                    // Don't apply during dragging
                 }
             }
+            
+            addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+                override fun onStartTrackingTouch(slider: Slider) {
+                    // Cancel any pending auto-apply when user starts dragging
+                    autoApplyJob?.cancel()
+                }
+                
+                override fun onStopTrackingTouch(slider: Slider) {
+                    // Apply immediately when user releases the slider
+                    applyLoudnessSettings()
+                }
+            })
         }
         
         // Reference Slider
@@ -181,12 +193,26 @@ class LoudnessControllerActivity : BaseActivity() {
                     
                     referenceValueText.text = referencePhon.toInt().toString()
                     updateDisplay()
-                    scheduleAutoApply()
+                    // Don't apply during dragging
                 }
             }
+            
+            addOnSliderTouchListener(object : Slider.OnSliderTouchListener {
+                override fun onStartTrackingTouch(slider: Slider) {
+                    // Cancel any pending auto-apply when user starts dragging
+                    autoApplyJob?.cancel()
+                }
+                
+                override fun onStopTrackingTouch(slider: Slider) {
+                    // Apply immediately when user releases the slider
+                    applyLoudnessSettings()
+                }
+            })
         }
     }
     
+    // No longer needed - we apply immediately on slider release
+    /*
     private fun scheduleAutoApply() {
         // Cancel previous auto-apply job if exists
         autoApplyJob?.cancel()
@@ -197,6 +223,7 @@ class LoudnessControllerActivity : BaseActivity() {
             applyLoudnessSettings()
         }
     }
+    */
     
     private fun updateReferenceSliderRange() {
         // Reference slider always stays 75-90, no dynamic range changes
