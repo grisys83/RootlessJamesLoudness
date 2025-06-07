@@ -1,9 +1,31 @@
-<h1 align="center">
-  <img alt="Icon" width="75" src="https://github.com/thepbone/RootlessJamesDSP/blob/master/img/icons/web/icon-192.png?raw=true">
-  <br>
-  RootlessJamesDSP
-  <br>
-</h1>
+# RootlessJamesDSP with Loudness Controller
+
+A fork of [ThePBone/RootlessJamesDSP](https://github.com/ThePBone/RootlessJamesDSP) (forked on 2025-01-05) that adds an APO Loudness-style equal-loudness compensation controller.
+
+## Fork Features
+
+### Loudness Controller
+- Equal-loudness compensation based on ISO 226:2003 standard
+- Real-time SPL calculation with safety level indicators
+- Dual slider control: Real Volume (40-90 dB) and Reference (75-90 dB)
+- Pre-calculated EEL scripts for precise loudness compensation (6,816 files bundled)
+- Safety listening time calculation using NIOSH criteria
+
+### Interface
+- APO Loudness-style black display card with color-coded SPL indicators
+- Safety levels: Green (≤65 dB), Yellow (65-73 dB), Light Red (73-80 dB), Pink (80-85 dB), Red (≥85 dB)
+- Technical parameters display (Target, Reference, Offset, Preamp)
+
+### Technical Implementation
+- Uses pre-bundled FIR filters and EEL scripts for all reference/target combinations
+- Automatic offset calculation to match desired SPL levels
+- Extended preamp range down to -40 dB
+- Reference slider dynamically adjusts based on real volume
+
+---
+
+## Original RootlessJamesDSP
+
 <h4 align="center">System-wide JamesDSP implementation for non-rooted Android devices</h4>
 <p align="center">
   <a href="https://play.google.com/store/apps/details?id=me.timschneeberger.rootlessjamesdsp&utm_source=github&pcampaignid=pcampaignidMKT-Other-global-all-co-prtnr-py-PartBadge-Mar2515-1">

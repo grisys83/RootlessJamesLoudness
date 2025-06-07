@@ -22,7 +22,7 @@ echo.
 echo Installing to device...
 
 :: Install APK (using rootless universal APK)
-C:\adb\adb.exe -s LMG850N620fcfd4 install -r app\build\outputs\apk\rootlessFull\debug\JamesDSP-v1.6.14-51-rootless-full-universal-debug.apk
+C:\adb\adb.exe -s LMG850N620fcfd4 install -r app\build\outputs\apk\rootlessFull\debug\JamesDSP-v1.7.0-52-rootless-full-universal-debug.apk
 
 if %ERRORLEVEL% EQU 0 (
     echo Installation successful!

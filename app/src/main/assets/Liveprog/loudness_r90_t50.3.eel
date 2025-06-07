@@ -1,0 +1,9 @@
+desc: APO Loudness R90.0T50.3 (-27.46dB)
+
+@init
+DB_2_LOG = 0.11512925464970228420089957273422;
+gainLin = exp(-27.46 * DB_2_LOG);
+
+@sample
+spl0 *= gainLin;
+spl1 *= gainLin;

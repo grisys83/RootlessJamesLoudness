@@ -72,19 +72,23 @@ class LoudnessControllerActivity : BaseActivity() {
     
     // UI Components
     private lateinit var toolbar: MaterialToolbar
-    private lateinit var volumeSlider: Slider
-    private lateinit var volumeText: MaterialTextView
+    private lateinit var mainDisplayCard: MaterialCardView
+    private lateinit var realDbSplText: MaterialTextView
+    private lateinit var safeTimeText: MaterialTextView
+    private lateinit var technicalParamsText: MaterialTextView
+    private lateinit var realVolumeSlider: Slider
+    private lateinit var realVolumeValueText: MaterialTextView
+    private lateinit var referenceSlider: Slider
+    private lateinit var referenceValueText: MaterialTextView
     private lateinit var targetPhonText: MaterialTextView
-    private lateinit var referencePhonText: MaterialTextView
+    private lateinit var offsetText: MaterialTextView
     private lateinit var preampText: MaterialTextView
-    private lateinit var statusCard: MaterialCardView
-    private lateinit var statusText: MaterialTextView
-    private lateinit var applyButton: ExtendedFloatingActionButton
     
     // Current values
-    private var currentVolumeDb = DEFAULT_VOLUME_DB
+    private var realVolumeDb = DEFAULT_VOLUME_DB
     private var targetPhon = DEFAULT_VOLUME_DB
     private var referencePhon = DEFAULT_REFERENCE_PHON
+    private var userOffset = 0.0f
     private var finalPreamp = 0.0f
     
     // Audio manager for volume control
@@ -102,35 +106,27 @@ class LoudnessControllerActivity : BaseActivity() {
         
         initializeViews()
         setupToolbar()
-        setupVolumeSlider()
+        setupSliders()
         loadCurrentSettings()
         updateDisplay()
+        
+        // Copy all EEL files from assets on first run or update
+        copyAllEelFilesFromAssets()
     }
     
     private fun initializeViews() {
         toolbar = findViewById(R.id.toolbar)
-        volumeSlider = findViewById(R.id.volume_slider)
-        volumeText = findViewById(R.id.volume_text)
+        mainDisplayCard = findViewById(R.id.main_display_card)
+        realDbSplText = findViewById(R.id.real_db_spl_text)
+        safeTimeText = findViewById(R.id.safe_time_text)
+        technicalParamsText = findViewById(R.id.technical_params_text)
+        realVolumeSlider = findViewById(R.id.real_volume_slider)
+        realVolumeValueText = findViewById(R.id.real_volume_value_text)
+        referenceSlider = findViewById(R.id.reference_slider)
+        referenceValueText = findViewById(R.id.reference_value_text)
         targetPhonText = findViewById(R.id.target_phon_text)
-        referencePhonText = findViewById(R.id.reference_phon_text)
+        offsetText = findViewById(R.id.offset_text)
         preampText = findViewById(R.id.preamp_text)
-        statusCard = findViewById(R.id.status_card)
-        statusText = findViewById(R.id.status_text)
-        applyButton = findViewById(R.id.apply_button)
-        
-        // Hide apply button since we're using auto-apply
-        applyButton.visibility = View.GONE
-        
-        /*
-        applyButton.setOnClickListener {
-            applyLoudnessSettings()
-        }
-        */
-        
-        // Add click listener to reference phon text to allow changing it
-        referencePhonText.setOnClickListener {
-            showReferencePhonDialog()
-        }
     }
     
     private fun setupToolbar() {
@@ -142,137 +138,181 @@ class LoudnessControllerActivity : BaseActivity() {
         }
     }
     
-    private fun setupVolumeSlider() {
-        volumeSlider.apply {
+    private fun setupSliders() {
+        // Real Volume Slider
+        realVolumeSlider.apply {
             valueFrom = MIN_VOLUME_DB
-            valueTo = MAX_VOLUME_DB
-            stepSize = 0.5f
-            value = currentVolumeDb
+            valueTo = 90.0f  // Maximum real volume is 90 dB
+            stepSize = 0.1f
+            value = realVolumeDb
             
             addOnChangeListener { _, value, fromUser ->
                 if (fromUser) {
-                    currentVolumeDb = value
+                    realVolumeDb = value
+                    realVolumeValueText.text = String.format("%.1f", value)
+                    
+                    // Update reference slider's minimum based on real volume
+                    updateReferenceSliderRange()
+                    
                     updateDisplay()
-                    
-                    // Cancel previous auto-apply job if exists
-                    autoApplyJob?.cancel()
-                    
-                    // Schedule new auto-apply after 500ms
-                    autoApplyJob = CoroutineScope(Dispatchers.Main).launch {
-                        delay(500)
-                        applyLoudnessSettings()
-                    }
+                    scheduleAutoApply()
                 }
             }
+        }
+        
+        // Reference Slider
+        referenceSlider.apply {
+            valueFrom = 75.0f
+            valueTo = 90.0f
+            stepSize = 1.0f  // Changed to 1.0 for more granular control
+            value = referencePhon
+            
+            addOnChangeListener { _, value, fromUser ->
+                if (fromUser) {
+                    // Reference must be >= real volume and target
+                    val minReference = maxOf(realVolumeDb, targetPhon).coerceIn(75.0f, 90.0f)
+                    
+                    // Ensure reference is not below the minimum
+                    referencePhon = value.coerceAtLeast(minReference)
+                    
+                    // Update slider if we had to adjust the value
+                    if (referencePhon != value) {
+                        referenceSlider.value = referencePhon
+                    }
+                    
+                    referenceValueText.text = referencePhon.toInt().toString()
+                    updateDisplay()
+                    scheduleAutoApply()
+                }
+            }
+        }
+    }
+    
+    private fun scheduleAutoApply() {
+        // Cancel previous auto-apply job if exists
+        autoApplyJob?.cancel()
+        
+        // Schedule new auto-apply after 500ms
+        autoApplyJob = CoroutineScope(Dispatchers.Main).launch {
+            delay(500)
+            applyLoudnessSettings()
+        }
+    }
+    
+    private fun updateReferenceSliderRange() {
+        // Reference slider always stays 75-90, no dynamic range changes
+        // Just ensure current reference value meets constraints
+        val minReference = maxOf(realVolumeDb, targetPhon).coerceIn(75.0f, 90.0f)
+        
+        // Ensure current reference value is not below minimum
+        if (referencePhon < minReference) {
+            referencePhon = minReference
+            referenceSlider.value = referencePhon
+            referenceValueText.text = referencePhon.toInt().toString()
         }
     }
     
     private fun loadCurrentSettings() {
         // Load saved volume if any
-        currentVolumeDb = prefsVar.preferences.getFloat("loudness_real_volume_db", DEFAULT_VOLUME_DB)
+        realVolumeDb = prefsVar.preferences.getFloat("loudness_real_volume_db", DEFAULT_VOLUME_DB)
         referencePhon = prefsVar.preferences.getFloat("loudness_reference_phon", DEFAULT_REFERENCE_PHON)
         
-        volumeSlider.value = currentVolumeDb
+        realVolumeSlider.value = realVolumeDb
+        realVolumeValueText.text = String.format("%.1f", realVolumeDb)
+        referenceSlider.value = referencePhon
+        referenceValueText.text = referencePhon.toInt().toString()
     }
     
     private fun updateDisplay() {
-        // Determine target and reference based on real volume
-        when {
-            currentVolumeDb < 80 -> {
-                // For volumes below 80dB, target matches volume
-                targetPhon = currentVolumeDb
-                // Keep current reference phon
-            }
-            currentVolumeDb in 80f..90f -> {
-                // For volumes 80-90dB, both target and reference are close
-                targetPhon = currentVolumeDb
-                val availableRefs = listOf(75f, 80f, 85f, 90f)
-                referencePhon = availableRefs.minByOrNull { abs(it - currentVolumeDb) } ?: 80f
-            }
-            else -> {
-                // For volumes above 90dB, cap target at 90 phon
-                // but adjust preamp to compensate for actual volume
-                targetPhon = 90.0f
-                referencePhon = 90.0f
-            }
-        }
-        
-        // Ensure values are in valid range
-        targetPhon = targetPhon.coerceIn(40.0f, 90.0f)
-        referencePhon = referencePhon.coerceIn(75.0f, 90.0f)
-        
-        // Round to 0.1 for target
-        targetPhon = (targetPhon * 10).roundToInt() / 10f
+        // Apply the specified rules
+        applyLoudnessRules()
         
         // Calculate preamp
         val basePreamp = getPreamp(targetPhon, referencePhon)
-        val optimalOffset = findOptimalOffset(targetPhon, basePreamp, currentVolumeDb)
+        userOffset = findOptimalOffset(targetPhon, basePreamp, realVolumeDb)
+        finalPreamp = basePreamp + userOffset
         
-        // For volumes above 90dB, add extra compensation
-        val volumeCompensation = if (currentVolumeDb > 90) {
-            // Add compensation for volumes above 90dB
-            // Each 10dB above 90 requires about 3-4dB less gain
-            val excessVolume = currentVolumeDb - 90f
-            (excessVolume * 0.35f)  // 0.35 factor for gradual compensation
-        } else {
-            0f
+        // Calculate real dB SPL (for display)
+        val realDbSpl = realVolumeDb  // In this implementation, real volume is the actual SPL
+        
+        // Update main display with safety colors
+        updateMainDisplay(realDbSpl)
+        
+        // Update calculated values
+        targetPhonText.text = String.format("%.1f phon", targetPhon)
+        offsetText.text = String.format("%s%.1f dB", if (userOffset >= 0) "+" else "", userOffset)
+        preampText.text = String.format("%.1f dB", finalPreamp)
+        
+        // Update technical parameters text
+        val offsetSign = if (userOffset >= 0) "+" else ""
+        technicalParamsText.text = String.format("T%.0f R%.0f O%s%.1f P:%.0f", 
+            targetPhon, referencePhon, offsetSign, userOffset, finalPreamp)
+    }
+    
+    private fun applyLoudnessRules() {
+        // Basic constraints
+        realVolumeDb = realVolumeDb.coerceIn(40.0f, 90.0f)
+        
+        // Target is always equal to real volume (rounded to 0.1)
+        targetPhon = realVolumeDb
+        
+        // Reference must be at least equal to real volume and target
+        val minReference = maxOf(realVolumeDb, targetPhon).coerceIn(75.0f, 90.0f)
+        
+        // If current reference is less than minimum, update it
+        if (referencePhon < minReference) {
+            referencePhon = minReference
         }
         
-        finalPreamp = basePreamp + optimalOffset + volumeCompensation
+        // Round values to match available files
+        targetPhon = (targetPhon * 10).roundToInt() / 10f
+        referencePhon = referencePhon.roundToInt().toFloat()  // Round to integer for reference
         
-        // Update UI
-        volumeText.text = getString(R.string.loudness_volume_format, currentVolumeDb)
-        targetPhonText.text = getString(R.string.loudness_target_format, targetPhon)
-        referencePhonText.text = getString(R.string.loudness_reference_format, referencePhon.toInt())
-        preampText.text = getString(R.string.loudness_preamp_format, finalPreamp)
-        
-        // Update status based on whether loudness is active
-        val isActive = checkLoudnessActive()
-        if (isActive) {
-            statusCard.setCardBackgroundColor(ContextCompat.getColor(this, R.color.md_blue_A200_50))
-            statusText.text = getString(R.string.loudness_status_active)
-            statusText.setTextColor(ContextCompat.getColor(this, R.color.md_blue_A400))
-        } else {
-            statusCard.setCardBackgroundColor(ContextCompat.getColor(this, android.R.color.transparent))
-            statusText.text = getString(R.string.loudness_status_inactive)
-            statusText.setTextColor(ContextCompat.getColor(this, R.color.md_black_1000_54))
+        // Update sliders if needed
+        if (referenceSlider.value != referencePhon) {
+            referenceSlider.value = referencePhon
+            referenceValueText.text = referencePhon.toInt().toString()
         }
     }
     
-    private fun showReferencePhonDialog() {
-        val availableRefs = arrayOf("75 phon", "80 phon", "85 phon", "90 phon")
-        val currentIndex = when(referencePhon.toInt()) {
-            75 -> 0
-            80 -> 1
-            85 -> 2
-            90 -> 3
-            else -> 1
+    private fun updateMainDisplay(realDbSpl: Float) {
+        // Determine safety color
+        val color = when {
+            realDbSpl <= 65.0f -> "#00ff00"  // Green - Very Safe
+            realDbSpl < 73.0f -> "#ffff66"   // Yellow - Safe  
+            realDbSpl < 80.0f -> "#ff9999"   // Light Red - Caution
+            realDbSpl < 85.0f -> "#ff66ff"   // Pink - Warning
+            else -> "#ff3333"                // Red - Danger
         }
         
-        MaterialAlertDialogBuilder(this)
-            .setTitle(R.string.loudness_reference_dialog_title)
-            .setSingleChoiceItems(availableRefs, currentIndex) { dialog, which ->
-                referencePhon = when(which) {
-                    0 -> 75f
-                    1 -> 80f
-                    2 -> 85f
-                    3 -> 90f
-                    else -> 80f
-                }
-                prefsVar.preferences.edit().putFloat("loudness_reference_phon", referencePhon).apply()
-                updateDisplay()
-                dialog.dismiss()
+        // Update dB text with color
+        realDbSplText.text = String.format("%.1f dB", realDbSpl)
+        realDbSplText.setTextColor(android.graphics.Color.parseColor(color))
+        
+        // Calculate and update safe time
+        val safeTime = calculateSafeListeningTime(realDbSpl)
+        safeTimeText.text = "Safe: $safeTime"
+        safeTimeText.setTextColor(android.graphics.Color.parseColor(color))
+    }
+    
+    private fun calculateSafeListeningTime(realDbSpl: Float): String {
+        // NIOSH criteria: 85dB for 8 hours, 3dB exchange rate
+        return when {
+            realDbSpl < 80.0f -> "24h+"
+            else -> {
+                val hours = 8.0 / Math.pow(2.0, ((realDbSpl - 85.0) / 3.0).toDouble())
+                val safeHours = hours * 0.8  // 80% safety margin
                 
-                // Auto-apply after reference change
-                autoApplyJob?.cancel()
-                autoApplyJob = CoroutineScope(Dispatchers.Main).launch {
-                    delay(500)
-                    applyLoudnessSettings()
+                when {
+                    safeHours >= 24.0 -> "24h+"
+                    safeHours >= 1.0 -> String.format("%.1fh", safeHours)
+                    safeHours >= 0.0167 -> String.format("%dm", (safeHours * 60).toInt())
+                    else -> String.format("%ds", (safeHours * 3600).toInt())
                 }
             }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
+        }
     }
+    
     
     private fun checkLoudnessActive(): Boolean {
         // Check if the loudness EEL script is currently active
@@ -297,7 +337,7 @@ class LoudnessControllerActivity : BaseActivity() {
                 
                 // Save current settings
                 prefsVar.preferences.edit().apply {
-                    putFloat("loudness_real_volume_db", currentVolumeDb)
+                    putFloat("loudness_real_volume_db", realVolumeDb)
                     putFloat("loudness_reference_phon", referencePhon)
                     apply()
                 }
@@ -313,23 +353,36 @@ class LoudnessControllerActivity : BaseActivity() {
                 val filterFileObj = File(filterPath)
                 Timber.d("LoudnessController: Filter exists = ${filterFileObj.exists()}")
                 
-                // Generate EEL script
-                val eelScript = generateEelScript(finalPreamp)
-                val eelFilename = "loudness_auto_${currentVolumeDb}.eel"
+                // Use pre-bundled EEL file based on reference and target
+                val eelFilename = String.format("loudness_r%d_t%.1f.eel", referencePhon.toInt(), targetPhon)
                 
-                // Save EEL script to app's external files directory
+                // Copy EEL file from assets to external files directory if needed
                 val liveprogDir = File(this@LoudnessControllerActivity.getExternalFilesDir(null), "Liveprog")
                 if (!liveprogDir.exists()) {
                     liveprogDir.mkdirs()
                 }
                 
                 val eelFile = File(liveprogDir, eelFilename)
-                eelFile.writeText(eelScript)
+                
+                // Copy from assets if file doesn't exist or if we need to ensure it's up to date
+                try {
+                    val assetPath = "Liveprog/$eelFilename"
+                    assets.open(assetPath).use { inputStream ->
+                        eelFile.outputStream().use { outputStream ->
+                            inputStream.copyTo(outputStream)
+                        }
+                    }
+                    Timber.d("LoudnessController: Copied EEL file from assets: $assetPath")
+                } catch (e: Exception) {
+                    Timber.e(e, "LoudnessController: Failed to copy EEL file from assets, generating dynamically")
+                    // Fallback: generate EEL script dynamically
+                    val eelScript = generateEelScript(finalPreamp)
+                    eelFile.writeText(eelScript)
+                }
                 
                 // Debug: Log EEL file
                 Timber.d("LoudnessController: EEL file = ${eelFile.absolutePath}")
                 Timber.d("LoudnessController: EEL file exists = ${eelFile.exists()}")
-                Timber.d("LoudnessController: EEL script content:\n$eelScript")
                 
                 // Config file generation is kept for debugging/logging purposes
                 // but we'll use direct SharedPreferences setting instead
@@ -547,10 +600,13 @@ Liveprog.file=$eelFile
         var bestOffset = 0.0f
         var minError = 999.0f
         
-        // Search from -30dB to +30dB in 0.1dB steps
-        for (offset in -300..300) {
+        // Search from -40dB to +30dB in 0.1dB steps (extended range)
+        for (offset in -400..300) {
             val offsetDb = offset / 10.0f
             val finalPreamp = basePreamp + offsetDb
+            
+            // Skip if final preamp would be below -40dB
+            if (finalPreamp < -40.0f) continue
             
             // Calculate real dB SPL with this offset
             val baseDbSpl = getBaseDbSpl(targetPhon)
@@ -573,20 +629,68 @@ Liveprog.file=$eelFile
     }
     
     private fun getPreamp(listeningLevel: Float, referenceLevel: Float): Float {
-        // Find closest reference level
+        // Since we don't have preamp data for all reference levels (76-89),
+        // we'll interpolate between the available reference levels
         val refKeys = preampTable.keys.sorted()
-        val closestRef = refKeys.minByOrNull { abs(it - referenceLevel) } ?: 80f
         
-        // Get preamp for closest reference
-        val preamps = preampTable[closestRef]!!
+        // Find the two closest reference levels for interpolation
+        var lowerRef = 75f
+        var upperRef = 80f
+        
+        for (i in 0 until refKeys.size - 1) {
+            if (referenceLevel >= refKeys[i] && referenceLevel <= refKeys[i + 1]) {
+                lowerRef = refKeys[i]
+                upperRef = refKeys[i + 1]
+                break
+            }
+        }
+        
+        // If exact match exists, use it
+        if (referenceLevel in refKeys) {
+            val preamps = preampTable[referenceLevel]!!
+            val listenKeys = preamps.keys.sorted()
+            
+            // Find appropriate preamp for listening level
+            if (listeningLevel in preamps) {
+                return preamps[listeningLevel]!!
+            }
+            
+            // Interpolate between listening levels
+            for (i in 0 until listenKeys.size - 1) {
+                if (listeningLevel >= listenKeys[i] && listeningLevel <= listenKeys[i+1]) {
+                    return interpolate(listeningLevel, listenKeys[i], listenKeys[i+1],
+                                     preamps[listenKeys[i]]!!, preamps[listenKeys[i+1]]!!)
+                }
+            }
+            
+            // Extrapolate if outside range
+            return if (listeningLevel < listenKeys.first()) {
+                interpolate(listeningLevel, listenKeys[0], listenKeys[1],
+                           preamps[listenKeys[0]]!!, preamps[listenKeys[1]]!!)
+            } else {
+                val size = listenKeys.size
+                interpolate(listeningLevel, listenKeys[size-2], listenKeys[size-1],
+                           preamps[listenKeys[size-2]]!!, preamps[listenKeys[size-1]]!!)
+            }
+        }
+        
+        // Interpolate between reference levels
+        val lowerPreamp = getPreampForExactReference(listeningLevel, lowerRef)
+        val upperPreamp = getPreampForExactReference(listeningLevel, upperRef)
+        
+        return interpolate(referenceLevel, lowerRef, upperRef, lowerPreamp, upperPreamp)
+    }
+    
+    private fun getPreampForExactReference(listeningLevel: Float, referenceLevel: Float): Float {
+        val preamps = preampTable[referenceLevel] ?: return -20.0f // fallback
         val listenKeys = preamps.keys.sorted()
         
-        // Exact match
+        // Find appropriate preamp for listening level
         if (listeningLevel in preamps) {
             return preamps[listeningLevel]!!
         }
         
-        // Interpolate
+        // Interpolate between listening levels
         for (i in 0 until listenKeys.size - 1) {
             if (listeningLevel >= listenKeys[i] && listeningLevel <= listenKeys[i+1]) {
                 return interpolate(listeningLevel, listenKeys[i], listenKeys[i+1],
@@ -614,5 +718,62 @@ Liveprog.file=$eelFile
     override fun onSupportNavigateUp(): Boolean {
         onBackPressed()
         return true
+    }
+    
+    private fun copyAllEelFilesFromAssets() {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val liveprogDir = File(getExternalFilesDir(null), "Liveprog")
+                if (!liveprogDir.exists()) {
+                    liveprogDir.mkdirs()
+                }
+                
+                // Check if we need to copy files (on first run or update)
+                val versionFile = File(liveprogDir, ".version")
+                val currentVersion = BuildConfig.VERSION_CODE
+                val lastVersion = if (versionFile.exists()) {
+                    versionFile.readText().toIntOrNull() ?: 0
+                } else {
+                    0
+                }
+                
+                if (lastVersion < currentVersion) {
+                    Timber.d("LoudnessController: Copying EEL files from assets (version $lastVersion -> $currentVersion)")
+                    
+                    var copiedCount = 0
+                    val assetManager = assets
+                    
+                    // List all files in Liveprog assets directory
+                    val eelFiles = assetManager.list("Liveprog") ?: emptyArray()
+                    
+                    for (filename in eelFiles) {
+                        if (filename.endsWith(".eel")) {
+                            try {
+                                val assetPath = "Liveprog/$filename"
+                                val destFile = File(liveprogDir, filename)
+                                
+                                assetManager.open(assetPath).use { inputStream ->
+                                    destFile.outputStream().use { outputStream ->
+                                        inputStream.copyTo(outputStream)
+                                    }
+                                }
+                                copiedCount++
+                            } catch (e: Exception) {
+                                Timber.e(e, "Failed to copy $filename")
+                            }
+                        }
+                    }
+                    
+                    // Update version file
+                    versionFile.writeText(currentVersion.toString())
+                    
+                    Timber.d("LoudnessController: Copied $copiedCount EEL files from assets")
+                } else {
+                    Timber.d("LoudnessController: EEL files already up to date")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Error copying EEL files from assets")
+            }
+        }
     }
 }

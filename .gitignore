@@ -22,3 +22,39 @@ local.properties
 /APOLoudness/*.wav
 /APOLoudness/*_filter.wav
 *.wav
+
+# Test and temporary files
+temp*.txt
+test*.conf
+*.eel
+!app/src/main/assets/Liveprog/*.eel
+
+# APOLoudness directories
+/APOLoudness/
+/APOLoudnessEEL/
+/LoudnessEEL/
+/configs_1db/
+
+# Python scripts and generation files
+generate_*.py
+loudness_mobile.py
+set_vol.py
+auto_enable_dsp.py
+
+# Shell/batch scripts
+*.bat
+*.sh
+!gradlew.bat
+
+# SMART_LOUDNESS_GUIDE.md and other guides
+SMART_LOUDNESS_GUIDE.md
+LOUDNESS_TEST_*.md
+OUTPUT_GAIN_DEBUG.md
+
+# Tasker and termux files
+loudness_tasker.xml
+loudness_termux.sh
+
+# Copy script
+copy_eel_to_assets.sh
+cleanup_eel_script.sh

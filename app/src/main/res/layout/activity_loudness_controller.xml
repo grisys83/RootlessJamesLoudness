@@ -33,81 +33,139 @@
             android:orientation="vertical"
             android:padding="16dp">
 
-            <!-- Status Card -->
+            <!-- Main Display Card (APO Loudness Style) -->
             <com.google.android.material.card.MaterialCardView
-                android:id="@+id/status_card"
+                android:id="@+id/main_display_card"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="24dp"
-                app:cardBackgroundColor="?attr/colorSurfaceVariant"
-                app:cardCornerRadius="12dp"
-                app:cardElevation="0dp">
+                app:cardBackgroundColor="#000000"
+                app:cardCornerRadius="8dp"
+                app:cardElevation="4dp">
 
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:orientation="horizontal"
+                    android:orientation="vertical"
                     android:padding="16dp"
-                    android:gravity="center_vertical">
+                    android:gravity="center">
 
-                    <ImageView
-                        android:layout_width="24dp"
-                        android:layout_height="24dp"
-                        android:src="@drawable/ic_baseline_equalizer_24dp"
-                        app:tint="?attr/colorOnSurfaceVariant" />
-
+                    <!-- Real dB SPL with color indicator -->
                     <com.google.android.material.textview.MaterialTextView
-                        android:id="@+id/status_text"
-                        android:layout_width="0dp"
+                        android:id="@+id/real_db_spl_text"
+                        android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:layout_marginStart="12dp"
-                        android:text="@string/loudness_status_inactive"
-                        android:textAppearance="?attr/textAppearanceBodyMedium"
-                        android:textColor="?attr/colorOnSurfaceVariant" />
+                        android:text="70.0 dB"
+                        android:textSize="32sp"
+                        android:textStyle="bold"
+                        android:textColor="#00ff00" />
+
+                    <!-- Safe time display -->
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/safe_time_text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Safe: 24h+"
+                        android:textSize="16sp"
+                        android:textColor="#00ff00"
+                        android:layout_marginTop="4dp" />
+
+                    <!-- Technical parameters in small text -->
+                    <com.google.android.material.textview.MaterialTextView
+                        android:id="@+id/technical_params_text"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="T70 R80 O+0.0 P:-14"
+                        android:textSize="10sp"
+                        android:textColor="#999999"
+                        android:layout_marginTop="8dp"
+                        android:fontFamily="monospace" />
 
                 </LinearLayout>
 
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- Volume Control Section -->
+            <!-- Real Volume Slider -->
             <com.google.android.material.textview.MaterialTextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/loudness_real_volume_title"
-                android:textAppearance="?attr/textAppearanceHeadlineSmall"
+                android:text="Real Volume"
+                android:textAppearance="?attr/textAppearanceBodyLarge"
                 android:textColor="?attr/colorOnSurface"
                 android:layout_marginBottom="8dp" />
 
-            <com.google.android.material.textview.MaterialTextView
-                android:id="@+id/volume_text"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="66.0 dB SPL"
-                android:textAppearance="?attr/textAppearanceHeadlineMedium"
-                android:textColor="?attr/colorPrimary"
-                android:layout_marginBottom="16dp" />
-
-            <com.google.android.material.slider.Slider
-                android:id="@+id/volume_slider"
+            <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:valueFrom="40"
-                android:valueTo="96"
-                android:value="66"
-                android:stepSize="0.5"
-                app:labelBehavior="withinBounds"
-                android:layout_marginBottom="32dp" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="16dp">
 
-            <!-- Settings Display -->
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/real_volume_slider"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:valueFrom="40"
+                    android:valueTo="90"
+                    android:value="70"
+                    android:stepSize="0.1"
+                    app:labelBehavior="gone" />
+
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/real_volume_value_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="70.0"
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    android:textColor="?attr/colorOnSurface"
+                    android:layout_marginStart="8dp"
+                    android:minWidth="48dp"
+                    android:gravity="end" />
+
+            </LinearLayout>
+
+            <!-- Reference Slider -->
             <com.google.android.material.textview.MaterialTextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="@string/loudness_settings_title"
-                android:textAppearance="?attr/textAppearanceHeadlineSmall"
+                android:text="Reference"
+                android:textAppearance="?attr/textAppearanceBodyLarge"
                 android:textColor="?attr/colorOnSurface"
-                android:layout_marginBottom="16dp" />
+                android:layout_marginBottom="8dp" />
 
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="24dp">
+
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/reference_slider"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:valueFrom="75"
+                    android:valueTo="90"
+                    android:value="80"
+                    android:stepSize="5"
+                    app:labelBehavior="gone" />
+
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/reference_value_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="80"
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    android:textColor="?attr/colorOnSurface"
+                    android:layout_marginStart="8dp"
+                    android:minWidth="48dp"
+                    android:gravity="end" />
+
+            </LinearLayout>
+
+            <!-- Calculated Values Card -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -127,57 +185,52 @@
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
-                        android:layout_marginBottom="12dp">
+                        android:layout_marginBottom="8dp">
 
                         <com.google.android.material.textview.MaterialTextView
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="@string/loudness_target_label"
-                            android:textAppearance="?attr/textAppearanceBodyLarge"
+                            android:text="Target Phon"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"
                             android:textColor="?attr/colorOnSurfaceVariant" />
 
                         <com.google.android.material.textview.MaterialTextView
                             android:id="@+id/target_phon_text"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="66.0 phon"
-                            android:textAppearance="?attr/textAppearanceBodyLarge"
+                            android:text="70.0 phon"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"
                             android:textColor="?attr/colorOnSurface" />
 
                     </LinearLayout>
 
-                    <!-- Reference Phon -->
+                    <!-- Offset -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
-                        android:layout_marginBottom="12dp">
+                        android:layout_marginBottom="8dp">
 
                         <com.google.android.material.textview.MaterialTextView
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="@string/loudness_reference_label"
-                            android:textAppearance="?attr/textAppearanceBodyLarge"
+                            android:text="Offset"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"
                             android:textColor="?attr/colorOnSurfaceVariant" />
 
                         <com.google.android.material.textview.MaterialTextView
-                            android:id="@+id/reference_phon_text"
+                            android:id="@+id/offset_text"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="80 phon"
-                            android:textAppearance="?attr/textAppearanceBodyLarge"
-                            android:textColor="?attr/colorOnSurface"
-                            android:background="?attr/selectableItemBackgroundBorderless"
-                            android:clickable="true"
-                            android:focusable="true"
-                            android:paddingStart="8dp"
-                            android:paddingEnd="8dp" />
+                            android:text="+0.0 dB"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"
+                            android:textColor="?attr/colorOnSurface" />
 
                     </LinearLayout>
 
-                    <!-- Preamp -->
+                    <!-- Final Preamp -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
@@ -187,8 +240,8 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="@string/loudness_preamp_label"
-                            android:textAppearance="?attr/textAppearanceBodyLarge"
+                            android:text="Final Preamp"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"
                             android:textColor="?attr/colorOnSurfaceVariant" />
 
                         <com.google.android.material.textview.MaterialTextView
@@ -196,7 +249,7 @@
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="-14.0 dB"
-                            android:textAppearance="?attr/textAppearanceBodyLarge"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"
                             android:textColor="?attr/colorOnSurface" />
 
                     </LinearLayout>
@@ -205,27 +258,140 @@
 
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- Info Text -->
-            <com.google.android.material.textview.MaterialTextView
+            <!-- Safety Level Legend -->
+            <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:text="@string/loudness_info_text"
-                android:textAppearance="?attr/textAppearanceBodyMedium"
-                android:textColor="?attr/colorOnSurfaceVariant"
-                android:layout_marginBottom="80dp" />
+                app:cardBackgroundColor="?attr/colorSurfaceVariant"
+                app:cardCornerRadius="12dp"
+                app:cardElevation="0dp"
+                android:layout_marginBottom="24dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <com.google.android.material.textview.MaterialTextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Safety Levels"
+                        android:textAppearance="?attr/textAppearanceBodyLarge"
+                        android:textColor="?attr/colorOnSurface"
+                        android:layout_marginBottom="8dp" />
+
+                    <!-- Safety levels -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginBottom="4dp">
+
+                        <View
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:background="#00ff00"
+                            android:layout_marginEnd="8dp" />
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="≤65 dB: Very Safe (24h+)"
+                            android:textAppearance="?attr/textAppearanceCaption"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginBottom="4dp">
+
+                        <View
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:background="#ffff66"
+                            android:layout_marginEnd="8dp" />
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="65-73 dB: Safe"
+                            android:textAppearance="?attr/textAppearanceCaption"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginBottom="4dp">
+
+                        <View
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:background="#ff9999"
+                            android:layout_marginEnd="8dp" />
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="73-80 dB: Caution"
+                            android:textAppearance="?attr/textAppearanceCaption"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:layout_marginBottom="4dp">
+
+                        <View
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:background="#ff66ff"
+                            android:layout_marginEnd="8dp" />
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="80-85 dB: Warning"
+                            android:textAppearance="?attr/textAppearanceCaption"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal">
+
+                        <View
+                            android:layout_width="16dp"
+                            android:layout_height="16dp"
+                            android:background="#ff3333"
+                            android:layout_marginEnd="8dp" />
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="≥85 dB: Danger"
+                            android:textAppearance="?attr/textAppearanceCaption"
+                            android:textColor="?attr/colorOnSurfaceVariant" />
+
+                    </LinearLayout>
+
+                </LinearLayout>
+
+            </com.google.android.material.card.MaterialCardView>
 
         </LinearLayout>
 
     </androidx.core.widget.NestedScrollView>
-
-    <!-- Apply Button -->
-    <com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
-        android:id="@+id/apply_button"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="bottom|end"
-        android:layout_margin="16dp"
-        android:text="@string/loudness_apply"
-        app:icon="@drawable/ic_twotone_check_24dp" />
 
 </androidx.coordinatorlayout.widget.CoordinatorLayout>
