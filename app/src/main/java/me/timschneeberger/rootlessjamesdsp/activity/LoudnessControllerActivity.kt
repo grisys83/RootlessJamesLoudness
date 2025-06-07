@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
 import android.os.Bundle
+import android.view.View
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -15,6 +16,8 @@ import com.google.android.material.slider.Slider
 import com.google.android.material.textview.MaterialTextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import me.timschneeberger.rootlessjamesdsp.BuildConfig
@@ -87,6 +90,9 @@ class LoudnessControllerActivity : BaseActivity() {
     // Audio manager for volume control
     private lateinit var audioManager: AudioManager
     
+    // Auto-apply job
+    private var autoApplyJob: Job? = null
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_loudness_controller)
@@ -112,9 +118,14 @@ class LoudnessControllerActivity : BaseActivity() {
         statusText = findViewById(R.id.status_text)
         applyButton = findViewById(R.id.apply_button)
         
+        // Hide apply button since we're using auto-apply
+        applyButton.visibility = View.GONE
+        
+        /*
         applyButton.setOnClickListener {
             applyLoudnessSettings()
         }
+        */
         
         // Add click listener to reference phon text to allow changing it
         referencePhonText.setOnClickListener {
@@ -142,6 +153,15 @@ class LoudnessControllerActivity : BaseActivity() {
                 if (fromUser) {
                     currentVolumeDb = value
                     updateDisplay()
+                    
+                    // Cancel previous auto-apply job if exists
+                    autoApplyJob?.cancel()
+                    
+                    // Schedule new auto-apply after 500ms
+                    autoApplyJob = CoroutineScope(Dispatchers.Main).launch {
+                        delay(500)
+                        applyLoudnessSettings()
+                    }
                 }
             }
         }
@@ -242,6 +262,13 @@ class LoudnessControllerActivity : BaseActivity() {
                 prefsVar.preferences.edit().putFloat("loudness_reference_phon", referencePhon).apply()
                 updateDisplay()
                 dialog.dismiss()
+                
+                // Auto-apply after reference change
+                autoApplyJob?.cancel()
+                autoApplyJob = CoroutineScope(Dispatchers.Main).launch {
+                    delay(500)
+                    applyLoudnessSettings()
+                }
             }
             .setNegativeButton(android.R.string.cancel, null)
             .show()
@@ -259,18 +286,14 @@ class LoudnessControllerActivity : BaseActivity() {
     
     private fun applyLoudnessSettings() {
         CoroutineScope(Dispatchers.IO).launch {
-            // Save current volume level before muting (declare outside try block for access in catch)
+            // Save current volume level before muting
             val currentSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
             val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
             
             try {
-                
-                // Mute system volume to prevent loud transients during DSP restart
-                Timber.d("LoudnessController: Muting system volume before applying changes")
+                // Mute system volume briefly to prevent loud transients during DSP settings change
+                Timber.d("LoudnessController: Muting system volume during DSP update")
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
-                
-                // Small delay to ensure volume is muted
-                Thread.sleep(100)
                 
                 // Save current settings
                 prefsVar.preferences.edit().apply {
@@ -308,24 +331,18 @@ class LoudnessControllerActivity : BaseActivity() {
                 Timber.d("LoudnessController: EEL file exists = ${eelFile.exists()}")
                 Timber.d("LoudnessController: EEL script content:\n$eelScript")
                 
-                // Generate and save config file (use relative paths)
+                // Config file generation is kept for debugging/logging purposes
+                // but we'll use direct SharedPreferences setting instead
+                /*
                 val config = generateConfig(currentVolumeDb, targetPhon, referencePhon, finalPreamp, filterFile, "Liveprog/$eelFilename")
-                
-                // Save config file to the location watched by ConfigFileWatcher
                 val configDir = File(getExternalFilesDir(null), "JamesDSP")
                 if (!configDir.exists()) {
                     configDir.mkdirs()
                 }
-                
                 val configFile = File(configDir, "JamesDSP.conf")
                 configFile.writeText(config)
-                
-                // Log config file path for debugging
-                Timber.d("LoudnessController: Config file saved to: ${configFile.absolutePath}")
-                Timber.d("LoudnessController: Config content:\n$config")
-                
-                // Small delay to ensure file is written before ConfigFileWatcher detects it
-                Thread.sleep(200)
+                Timber.d("LoudnessController: Config would be:\n$config")
+                */
                 
                 // Enable master switch first to ensure DSP is running
                 val wasPoweredOn = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
@@ -336,11 +353,48 @@ class LoudnessControllerActivity : BaseActivity() {
                     Thread.sleep(1000) // Give time for DSP to start
                 }
                 
-                // ConfigFileWatcher will automatically detect the config file change and apply settings
-                // No need to manually set SharedPreferences - the config file handles everything
+                // Instead of using ConfigFileWatcher, directly set preferences like the UI does
+                Timber.d("LoudnessController: Setting Convolver preferences directly")
                 
-                Timber.d("LoudnessController: Waiting for ConfigFileWatcher to process config file...")
-                Thread.sleep(500) // Give ConfigFileWatcher time to detect and process the file
+                // First disable convolver
+                getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE).edit().apply {
+                    putBoolean(getString(R.string.key_convolver_enable), false)
+                    apply()
+                }
+                sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+                    putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER))
+                })
+                Thread.sleep(200)
+                
+                // Set convolver file using relative path (like FileLibraryPreference does)
+                val relativeFilterPath = "Convolver/$filterFile"
+                Timber.d("LoudnessController: Setting convolver file to: $relativeFilterPath")
+                getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE).edit().apply {
+                    putBoolean(getString(R.string.key_convolver_enable), true)
+                    putString(getString(R.string.key_convolver_file), relativeFilterPath)
+                    apply()
+                }
+                
+                // Set liveprog file using relative path
+                val relativeLiveprogPath = "Liveprog/$eelFilename"
+                Timber.d("LoudnessController: Setting liveprog file to: $relativeLiveprogPath")
+                getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE).edit().apply {
+                    putBoolean(getString(R.string.key_liveprog_enable), true)
+                    putString(getString(R.string.key_liveprog_file), relativeLiveprogPath)
+                    apply()
+                }
+                
+                // Send broadcast to update both effects
+                sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+                    putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER, Constants.PREF_LIVEPROG))
+                })
+                
+                // Wait 0.5 seconds then restore volume
+                Thread.sleep(500)
+                
+                // Restore original volume
+                Timber.d("LoudnessController: Restoring volume to: $currentSystemVolume")
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentSystemVolume, 0)
                 
                 // Verify settings were applied (optional - for debugging)
                 val convolverPrefs = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
@@ -377,6 +431,7 @@ class LoudnessControllerActivity : BaseActivity() {
                 Timber.d("LoudnessController: Final verification - Convolver = $finalConvolverFile")
                 Timber.d("LoudnessController: Final verification - Liveprog = $finalLiveprogFile")
                 
+                /*
                 // Wait 5 seconds to ensure DSP is fully initialized and stable
                 Timber.d("LoudnessController: Waiting 5 seconds for DSP to stabilize...")
                 Thread.sleep(5000)
@@ -384,15 +439,11 @@ class LoudnessControllerActivity : BaseActivity() {
                 // Restore volume to original level
                 Timber.d("LoudnessController: Restoring system volume to original level: $currentSystemVolume")
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentSystemVolume, 0)
+                */
                 
                 withContext(Dispatchers.Main) {
-                    // Use application context for toast to prevent activity leak
-                    applicationContext.toast(getString(R.string.loudness_applied_success))
+                    // Update display without showing any toast messages
                     updateDisplay()
-                    // Show additional debug toast
-                    if (BuildConfig.DEBUG) {
-                        applicationContext.toast("DSP engine reloaded - filters should be active now")
-                    }
                 }
                 
             } catch (e: Exception) {
@@ -407,8 +458,8 @@ class LoudnessControllerActivity : BaseActivity() {
                 }
                 
                 withContext(Dispatchers.Main) {
-                    // Use application context for toast to prevent activity leak
-                    applicationContext.toast(getString(R.string.loudness_applied_error, e.message))
+                    // Silent error handling - only log, no toast
+                    Timber.e("Failed to apply loudness settings: ${e.message}")
                 }
             }
         }
@@ -552,6 +603,12 @@ Liveprog.file=$eelFile
             interpolate(listeningLevel, listenKeys[size-2], listenKeys[size-1],
                        preamps[listenKeys[size-2]]!!, preamps[listenKeys[size-1]]!!)
         }
+    }
+    
+    override fun onDestroy() {
+        super.onDestroy()
+        // Cancel any pending auto-apply job
+        autoApplyJob?.cancel()
     }
     
     override fun onSupportNavigateUp(): Boolean {
