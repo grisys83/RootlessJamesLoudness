@@ -110,8 +110,7 @@ class LoudnessControllerActivity : BaseActivity() {
         loadCurrentSettings()
         updateDisplay()
         
-        // Copy all EEL files from assets on first run or update
-        copyAllEelFilesFromAssets()
+        // EEL files are loaded on-demand directly from assets (no copying needed)
     }
     
     private fun initializeViews() {
@@ -356,7 +355,7 @@ class LoudnessControllerActivity : BaseActivity() {
                 // Use pre-bundled EEL file based on reference and target
                 val eelFilename = String.format("loudness_r%d_t%.1f.eel", referencePhon.toInt(), targetPhon)
                 
-                // Copy EEL file from assets to external files directory if needed
+                // Only copy the specific EEL file we need (not all 6816 files)
                 val liveprogDir = File(this@LoudnessControllerActivity.getExternalFilesDir(null), "Liveprog")
                 if (!liveprogDir.exists()) {
                     liveprogDir.mkdirs()
@@ -364,20 +363,27 @@ class LoudnessControllerActivity : BaseActivity() {
                 
                 val eelFile = File(liveprogDir, eelFilename)
                 
-                // Copy from assets if file doesn't exist or if we need to ensure it's up to date
-                try {
-                    val assetPath = "Liveprog/$eelFilename"
-                    assets.open(assetPath).use { inputStream ->
-                        eelFile.outputStream().use { outputStream ->
-                            inputStream.copyTo(outputStream)
+                // Copy from assets only if file doesn't exist
+                if (!eelFile.exists()) {
+                    try {
+                        val assetPath = "Liveprog/$eelFilename"
+                        assets.open(assetPath).use { inputStream ->
+                            eelFile.outputStream().use { outputStream ->
+                                inputStream.copyTo(outputStream)
+                            }
                         }
+                        Timber.d("LoudnessController: Copied EEL file from assets: $assetPath")
+                    } catch (e: Exception) {
+                        Timber.e(e, "LoudnessController: Failed to copy EEL file from assets, generating dynamically")
+                        // Fallback: generate EEL script dynamically
+                        val eelScript = generateEelScript(finalPreamp)
+                        eelFile.writeText(eelScript)
                     }
-                    Timber.d("LoudnessController: Copied EEL file from assets: $assetPath")
-                } catch (e: Exception) {
-                    Timber.e(e, "LoudnessController: Failed to copy EEL file from assets, generating dynamically")
-                    // Fallback: generate EEL script dynamically
-                    val eelScript = generateEelScript(finalPreamp)
-                    eelFile.writeText(eelScript)
+                    
+                    // Clean up old files to save space
+                    cleanupOldEelFiles(liveprogDir, eelFilename)
+                } else {
+                    Timber.d("LoudnessController: EEL file already exists, using cached version")
                 }
                 
                 // Debug: Log EEL file
@@ -720,60 +726,28 @@ Liveprog.file=$eelFile
         return true
     }
     
-    private fun copyAllEelFilesFromAssets() {
-        CoroutineScope(Dispatchers.IO).launch {
-            try {
-                val liveprogDir = File(getExternalFilesDir(null), "Liveprog")
-                if (!liveprogDir.exists()) {
-                    liveprogDir.mkdirs()
-                }
+    // Clean up old EEL files keeping only recent ones
+    private fun cleanupOldEelFiles(liveprogDir: File, currentFile: String) {
+        try {
+            val files = liveprogDir.listFiles { file -> 
+                file.extension == "eel" && file.name != currentFile 
+            } ?: emptyArray()
+            
+            val maxCacheSize = 20 // Keep only 20 recent files
+            
+            if (files.size > maxCacheSize) {
+                // Sort by last modified time (oldest first)
+                files.sortBy { it.lastModified() }
                 
-                // Check if we need to copy files (on first run or update)
-                val versionFile = File(liveprogDir, ".version")
-                val currentVersion = BuildConfig.VERSION_CODE
-                val lastVersion = if (versionFile.exists()) {
-                    versionFile.readText().toIntOrNull() ?: 0
-                } else {
-                    0
+                // Delete oldest files
+                val toDelete = files.size - maxCacheSize
+                for (i in 0 until toDelete) {
+                    files[i].delete()
+                    Timber.d("LoudnessController: Deleted old EEL file: ${files[i].name}")
                 }
-                
-                if (lastVersion < currentVersion) {
-                    Timber.d("LoudnessController: Copying EEL files from assets (version $lastVersion -> $currentVersion)")
-                    
-                    var copiedCount = 0
-                    val assetManager = assets
-                    
-                    // List all files in Liveprog assets directory
-                    val eelFiles = assetManager.list("Liveprog") ?: emptyArray()
-                    
-                    for (filename in eelFiles) {
-                        if (filename.endsWith(".eel")) {
-                            try {
-                                val assetPath = "Liveprog/$filename"
-                                val destFile = File(liveprogDir, filename)
-                                
-                                assetManager.open(assetPath).use { inputStream ->
-                                    destFile.outputStream().use { outputStream ->
-                                        inputStream.copyTo(outputStream)
-                                    }
-                                }
-                                copiedCount++
-                            } catch (e: Exception) {
-                                Timber.e(e, "Failed to copy $filename")
-                            }
-                        }
-                    }
-                    
-                    // Update version file
-                    versionFile.writeText(currentVersion.toString())
-                    
-                    Timber.d("LoudnessController: Copied $copiedCount EEL files from assets")
-                } else {
-                    Timber.d("LoudnessController: EEL files already up to date")
-                }
-            } catch (e: Exception) {
-                Timber.e(e, "Error copying EEL files from assets")
             }
+        } catch (e: Exception) {
+            Timber.e(e, "Error cleaning up old EEL files")
         }
     }
 }

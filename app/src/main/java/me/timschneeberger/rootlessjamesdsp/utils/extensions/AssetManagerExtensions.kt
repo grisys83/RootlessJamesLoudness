@@ -13,7 +13,8 @@ object AssetManagerExtensions {
             try {
                 this.copyAssetDir("Convolver", it, force)
                 this.copyAssetDir("DDC", it, force)
-                this.copyAssetDir("Liveprog", it, force)
+                // Skip Liveprog - files will be copied on-demand by LoudnessControllerActivity
+                // this.copyAssetDir("Liveprog", it, force)
             }
             catch (ex: Exception) {
                 Timber.e("Failed to extract assets")
