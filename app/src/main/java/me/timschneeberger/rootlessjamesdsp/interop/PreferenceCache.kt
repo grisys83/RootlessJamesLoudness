@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.annotation.StringRes
 import me.timschneeberger.rootlessjamesdsp.flavor.CrashlyticsImpl
+import timber.log.Timber
 import kotlin.reflect.KClass
 
 class PreferenceCache(val context: Context) {
@@ -34,6 +35,11 @@ class PreferenceCache(val context: Context) {
             selectedNamespace?.let {
                 changedNamespaces.add(it)
             }
+        }
+
+        // Log when we detect changes in key preferences
+        if (!unchanged && (name.contains("enable") || name.contains("file"))) {
+            Timber.d("PreferenceCache: Changed preference detected - namespace=$selectedNamespace, key=$name, old=${cache[name]}, new=$current")
         }
 
         CrashlyticsImpl.setCustomKey("dsp_$name", current.toString())

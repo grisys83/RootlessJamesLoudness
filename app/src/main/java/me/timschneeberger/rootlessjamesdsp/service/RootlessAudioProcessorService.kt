@@ -294,13 +294,16 @@ class RootlessAudioProcessorService : BaseAudioProcessorService() {
     // General purpose broadcast receiver
     private val broadcastReceiver: BroadcastReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            Timber.d("Broadcast received: ${intent.action}")
             when (intent.action) {
                 ACTION_SAMPLE_RATE_UPDATED -> engine.syncWithPreferences(arrayOf(Constants.PREF_CONVOLVER))
                 ACTION_PREFERENCES_UPDATED -> {
                     val namespaces = intent.getStringArrayExtra("namespaces")
                     if (namespaces != null) {
+                        Timber.d("Syncing preferences for namespaces: ${namespaces.joinToString(", ")}")
                         engine.syncWithPreferences(namespaces)
                     } else {
+                        Timber.d("Syncing all preferences (no specific namespaces)")
                         engine.syncWithPreferences()
                     }
                 }

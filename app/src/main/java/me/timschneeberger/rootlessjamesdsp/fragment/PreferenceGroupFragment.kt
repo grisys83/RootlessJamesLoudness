@@ -42,8 +42,15 @@ class PreferenceGroupFragment : PreferenceFragmentCompat(), KoinComponent {
     private var recyclerView: RecyclerView? = null
 
     private val listener =
-        SharedPreferences.OnSharedPreferenceChangeListener { _, _ ->
-            requireContext().sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
+        SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+            // Include the namespace when sending the broadcast so the service knows which effect to update
+            val namespace = arguments?.getString(BUNDLE_PREF_NAME)
+            Timber.d("Preference changed: key=$key, namespace=$namespace")
+            requireContext().sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+                namespace?.let {
+                    putExtra("namespaces", arrayOf(it))
+                }
+            })
         }
 
     private val listenerApp =

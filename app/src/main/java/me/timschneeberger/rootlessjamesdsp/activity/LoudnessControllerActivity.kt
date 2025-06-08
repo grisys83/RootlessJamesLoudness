@@ -9,10 +9,12 @@ import android.widget.SeekBar
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.button.MaterialButton
 import com.google.android.material.card.MaterialCardView
 import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.floatingactionbutton.ExtendedFloatingActionButton
 import com.google.android.material.slider.Slider
+import com.google.android.material.textfield.TextInputEditText
 import com.google.android.material.textview.MaterialTextView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -32,7 +34,6 @@ import me.timschneeberger.rootlessjamesdsp.utils.isRoot
 import me.timschneeberger.rootlessjamesdsp.utils.isPlugin
 import timber.log.Timber
 import java.io.File
-import kotlin.math.abs
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
@@ -41,25 +42,12 @@ class LoudnessControllerActivity : BaseActivity() {
     
     companion object {
         // Volume range constants
-        const val MIN_VOLUME_DB = 40.0f
-        const val MAX_VOLUME_DB = 106.0f  // Updated to 106 dB max
-        const val DEFAULT_VOLUME_DB = 70.0f  // Adjusted default for new range
+        const val MIN_VOLUME_DB = 0.0f  // Start from 0 dB for measurement
+        const val MAX_VOLUME_DB = 125.0f  // Extended to 125 dB for high SPL
+        const val DEFAULT_VOLUME_DB = 60.0f  // Reasonable default
         
         // Default reference level  
         const val DEFAULT_REFERENCE_PHON = 80.0f
-        
-        // Measured real dB SPL values (from optimaloffsetcalculator.cpp)
-        // Extended to include higher volumes
-        private val measuredDbSpl = mapOf(
-            40.0f to 59.3f,
-            50.0f to 65.4f,
-            60.0f to 71.8f,
-            70.0f to 77.7f,
-            80.0f to 83.0f,
-            90.0f to 88.3f,
-            100.0f to 93.3f,  // Extrapolated values
-            106.0f to 96.3f   // for higher volumes
-        )
         
         // Preamp lookup table
         private val preampTable = mapOf(
@@ -83,16 +71,21 @@ class LoudnessControllerActivity : BaseActivity() {
     private lateinit var targetPhonText: MaterialTextView
     private lateinit var offsetText: MaterialTextView
     private lateinit var preampText: MaterialTextView
+    private lateinit var measuredSplInput: TextInputEditText
+    private lateinit var calibrateButton: MaterialButton
+    private lateinit var calibrationStatusText: MaterialTextView
+    private lateinit var calculationDetailsText: MaterialTextView
     
     // Current values
-    private var realVolumeDb = DEFAULT_VOLUME_DB
-    private var targetPhon = DEFAULT_VOLUME_DB
-    private var referencePhon = DEFAULT_REFERENCE_PHON
-    private var userOffset = 0.0f
-    private var finalPreamp = 0.0f
+    private var targetSpl = DEFAULT_VOLUME_DB  // This is what the user sets with the slider (real vol)
+    private var referenceLevel = DEFAULT_REFERENCE_PHON
+    private var calibrationOffset = 0.0f  // Calibration offset from measurement
     
     // Audio manager for volume control
     private lateinit var audioManager: AudioManager
+    
+    // Loudness controller
+    private lateinit var loudnessController: me.timschneeberger.rootlessjamesdsp.utils.LoudnessController
     
     // Auto-apply job
     private var autoApplyJob: Job? = null
@@ -104,9 +97,13 @@ class LoudnessControllerActivity : BaseActivity() {
         // Initialize AudioManager
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         
+        // Initialize LoudnessController
+        loudnessController = me.timschneeberger.rootlessjamesdsp.utils.LoudnessController(this)
+        
         initializeViews()
         setupToolbar()
         setupSliders()
+        setupCalibration()
         loadCurrentSettings()
         updateDisplay()
         
@@ -126,6 +123,10 @@ class LoudnessControllerActivity : BaseActivity() {
         targetPhonText = findViewById(R.id.target_phon_text)
         offsetText = findViewById(R.id.offset_text)
         preampText = findViewById(R.id.preamp_text)
+        measuredSplInput = findViewById(R.id.measured_spl_input)
+        calibrateButton = findViewById(R.id.calibrate_button)
+        calibrationStatusText = findViewById(R.id.calibration_status_text)
+        calculationDetailsText = findViewById(R.id.calculation_details_text)
     }
     
     private fun setupToolbar() {
@@ -140,19 +141,15 @@ class LoudnessControllerActivity : BaseActivity() {
     private fun setupSliders() {
         // Real Volume Slider
         realVolumeSlider.apply {
-            valueFrom = MIN_VOLUME_DB
-            valueTo = 90.0f  // Maximum real volume is 90 dB
+            valueFrom = 0.0f  // Start from 0 dB for real measurement
+            valueTo = 125.0f  // Extended range for high SPL measurements
             stepSize = 0.1f
-            value = realVolumeDb
+            value = targetSpl
             
             addOnChangeListener { _, value, fromUser ->
                 if (fromUser) {
-                    realVolumeDb = value
+                    targetSpl = value  // Real vol = target SPL
                     realVolumeValueText.text = String.format("%.1f", value)
-                    
-                    // Update reference slider's minimum based on real volume
-                    updateReferenceSliderRange()
-                    
                     updateDisplay()
                     // Don't apply during dragging
                 }
@@ -175,23 +172,13 @@ class LoudnessControllerActivity : BaseActivity() {
         referenceSlider.apply {
             valueFrom = 75.0f
             valueTo = 90.0f
-            stepSize = 1.0f  // Changed to 1.0 for more granular control
-            value = referencePhon
+            stepSize = 1.0f
+            value = referenceLevel
             
             addOnChangeListener { _, value, fromUser ->
                 if (fromUser) {
-                    // Reference must be >= real volume and target
-                    val minReference = maxOf(realVolumeDb, targetPhon).coerceIn(75.0f, 90.0f)
-                    
-                    // Ensure reference is not below the minimum
-                    referencePhon = value.coerceAtLeast(minReference)
-                    
-                    // Update slider if we had to adjust the value
-                    if (referencePhon != value) {
-                        referenceSlider.value = referencePhon
-                    }
-                    
-                    referenceValueText.text = referencePhon.toInt().toString()
+                    referenceLevel = value
+                    referenceValueText.text = referenceLevel.toInt().toString()
                     updateDisplay()
                     // Don't apply during dragging
                 }
@@ -211,6 +198,46 @@ class LoudnessControllerActivity : BaseActivity() {
         }
     }
     
+    private fun setupCalibration() {
+        // Update calibration status on startup
+        updateCalibrationStatus()
+        
+        calibrateButton.setOnClickListener {
+            performCalibration()
+        }
+    }
+    
+    private fun performCalibration() {
+        val measuredText = measuredSplInput.text?.toString()
+        val measuredSpl = measuredText?.toFloatOrNull()
+        
+        if (measuredSpl == null || measuredSpl < 40f || measuredSpl > 120f) {
+            toast("Please enter a valid SPL measurement (40-120 dB)")
+            return
+        }
+        
+        // Perform calibration using current target SPL as expected value
+        val expectedSpl = targetSpl
+        loudnessController.performCalibration(measuredSpl, expectedSpl)
+        
+        // Update calibration offset for display
+        calibrationOffset = measuredSpl - expectedSpl
+        
+        // Update UI
+        updateCalibrationStatus()
+        
+        toast("Calibration complete! Offset: ${String.format("%.1f", calibrationOffset)} dB")
+    }
+    
+    private fun updateCalibrationStatus() {
+        if (calibrationOffset != 0.0f) {
+            calibrationStatusText.text = "Calibration offset: ${String.format("%.1f", calibrationOffset)} dB"
+            calibrationStatusText.visibility = View.VISIBLE
+        } else {
+            calibrationStatusText.visibility = View.GONE
+        }
+    }
+    
     // No longer needed - we apply immediately on slider release
     /*
     private fun scheduleAutoApply() {
@@ -225,80 +252,94 @@ class LoudnessControllerActivity : BaseActivity() {
     }
     */
     
-    private fun updateReferenceSliderRange() {
-        // Reference slider always stays 75-90, no dynamic range changes
-        // Just ensure current reference value meets constraints
-        val minReference = maxOf(realVolumeDb, targetPhon).coerceIn(75.0f, 90.0f)
-        
-        // Ensure current reference value is not below minimum
-        if (referencePhon < minReference) {
-            referencePhon = minReference
-            referenceSlider.value = referencePhon
-            referenceValueText.text = referencePhon.toInt().toString()
-        }
-    }
     
     private fun loadCurrentSettings() {
-        // Load saved volume if any
-        realVolumeDb = prefsVar.preferences.getFloat("loudness_real_volume_db", DEFAULT_VOLUME_DB)
-        referencePhon = prefsVar.preferences.getFloat("loudness_reference_phon", DEFAULT_REFERENCE_PHON)
+        // Load saved settings
+        targetSpl = loudnessController.getTargetSpl()
+        referenceLevel = loudnessController.getReferenceLevel()
+        calibrationOffset = loudnessController.getCalibrationOffset()
         
-        realVolumeSlider.value = realVolumeDb
-        realVolumeValueText.text = String.format("%.1f", realVolumeDb)
-        referenceSlider.value = referencePhon
-        referenceValueText.text = referencePhon.toInt().toString()
+        realVolumeSlider.value = targetSpl
+        realVolumeValueText.text = String.format("%.1f", targetSpl)
+        referenceSlider.value = referenceLevel
+        referenceValueText.text = referenceLevel.toInt().toString()
     }
     
     private fun updateDisplay() {
-        // Apply the specified rules
-        applyLoudnessRules()
-        
-        // Calculate preamp
-        val basePreamp = getPreamp(targetPhon, referencePhon)
-        userOffset = findOptimalOffset(targetPhon, basePreamp, realVolumeDb)
-        finalPreamp = basePreamp + userOffset
-        
-        // Calculate real dB SPL (for display)
-        val realDbSpl = realVolumeDb  // In this implementation, real volume is the actual SPL
+        // Real volume is target SPL (what user sets with slider)
+        val realDbSpl = targetSpl
         
         // Update main display with safety colors
         updateMainDisplay(realDbSpl)
         
+        // Calculate preamp from FIR filter
+        val preamp = getPreamp(targetSpl, referenceLevel)
+        
         // Update calculated values
-        targetPhonText.text = String.format("%.1f phon", targetPhon)
-        offsetText.text = String.format("%s%.1f dB", if (userOffset >= 0) "+" else "", userOffset)
-        preampText.text = String.format("%.1f dB", finalPreamp)
+        targetPhonText.text = String.format("%.1f phon", targetSpl)
+        offsetText.text = String.format("%.1f dB", calibrationOffset)
+        preampText.text = String.format("%.1f dB", preamp)
         
         // Update technical parameters text
-        val offsetSign = if (userOffset >= 0) "+" else ""
-        technicalParamsText.text = String.format("T%.0f R%.0f O%s%.1f P:%.0f", 
-            targetPhon, referencePhon, offsetSign, userOffset, finalPreamp)
+        technicalParamsText.text = String.format("T%.0f R%.0f C:%.1f P:%.1f", 
+            targetSpl, referenceLevel, calibrationOffset, preamp)
+        
+        // Update calculation details
+        updateCalculationDetails(preamp)
     }
     
-    private fun applyLoudnessRules() {
-        // Basic constraints
-        realVolumeDb = realVolumeDb.coerceIn(40.0f, 90.0f)
+    private fun updateReferenceSliderRange() {
+        // No need to update range, just ensure values are valid
+        targetSpl = targetSpl.coerceIn(40.0f, 90.0f)
+        referenceLevel = referenceLevel.coerceIn(75.0f, 90.0f)
+    }
+    
+    private fun updateCalculationDetails(firPreamp: Float) {
+        // Get user gain from LoudnessController preferences
+        val userGain = prefsApp.preferences.getFloat("loudness_user_gain", 0.0f)
         
-        // Target is always equal to real volume (rounded to 0.1)
-        targetPhon = realVolumeDb
+        // Calculate Total EEL Gain
+        val totalEelGain = -calibrationOffset + firPreamp + userGain
         
-        // Reference must be at least equal to real volume and target
-        val minReference = maxOf(realVolumeDb, targetPhon).coerceIn(75.0f, 90.0f)
+        // Expected SPL without calibration
+        val expectedSplWithoutCalib = targetSpl
         
-        // If current reference is less than minimum, update it
-        if (referencePhon < minReference) {
-            referencePhon = minReference
+        // Build detailed calculation text
+        val calculationText = StringBuilder()
+        
+        calculationText.append("📥 Input Values:\n")
+        calculationText.append("  • Target SPL (Slider): %.1f dB\n".format(targetSpl))
+        calculationText.append("  • Reference Level: %.0f phon\n".format(referenceLevel))
+        calculationText.append("  • Calibration Offset: %.1f dB\n".format(calibrationOffset))
+        calculationText.append("  • User Gain: %.1f dB\n\n".format(userGain))
+        
+        calculationText.append("🎛️ FIR Filter Selection:\n")
+        val clampedTarget = targetSpl.coerceIn(40f, 90f)
+        calculationText.append("  • Clamped Target: %.1f dB\n".format(clampedTarget))
+        calculationText.append("  • Filter File: %.1f-%.1f_filter.wav\n".format(clampedTarget, referenceLevel))
+        calculationText.append("  • FIR Preamp: %.2f dB\n\n".format(firPreamp))
+        
+        calculationText.append("🧮 Gain Calculation:\n")
+        calculationText.append("  Total EEL Gain = -CalibOffset + FIR Preamp + User Gain\n")
+        calculationText.append("  Total EEL Gain = -(%.1f) + (%.2f) + (%.1f)\n".format(calibrationOffset, firPreamp, userGain))
+        calculationText.append("  Total EEL Gain = %.2f dB\n\n".format(totalEelGain))
+        
+        calculationText.append("🔊 Signal Flow:\n")
+        calculationText.append("  1. Audio Input\n")
+        calculationText.append("  2. → FIR Filter (Loudness Curve + %.2f dB)\n".format(firPreamp))
+        calculationText.append("  3. → EEL Gain (%.2f dB)\n".format(totalEelGain))
+        calculationText.append("  4. → Audio Output\n\n")
+        
+        calculationText.append("📐 Expected Output:\n")
+        if (calibrationOffset != 0f) {
+            val uncalibratedOutput = targetSpl + calibrationOffset
+            calculationText.append("  Without Calibration: %.1f dB\n".format(uncalibratedOutput))
+            calculationText.append("  With Calibration: %.1f dB ✓\n".format(targetSpl))
+        } else {
+            calculationText.append("  Output: %.1f dB\n".format(targetSpl))
         }
         
-        // Round values to match available files
-        targetPhon = (targetPhon * 10).roundToInt() / 10f
-        referencePhon = referencePhon.roundToInt().toFloat()  // Round to integer for reference
-        
-        // Update sliders if needed
-        if (referenceSlider.value != referencePhon) {
-            referenceSlider.value = referencePhon
-            referenceValueText.text = referencePhon.toInt().toString()
-        }
+        calculationDetailsText.text = calculationText.toString()
     }
     
     private fun updateMainDisplay(realDbSpl: Float) {
@@ -340,16 +381,6 @@ class LoudnessControllerActivity : BaseActivity() {
     }
     
     
-    private fun checkLoudnessActive(): Boolean {
-        // Check if the loudness EEL script is currently active
-        val liveprogEnabled = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
-            .getBoolean(getString(R.string.key_liveprog_enable), false)
-        val liveprogFile = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
-            .getString(getString(R.string.key_liveprog_file), "")
-        
-        return liveprogEnabled && liveprogFile?.contains("loudness_auto_") == true
-    }
-    
     private fun applyLoudnessSettings() {
         CoroutineScope(Dispatchers.IO).launch {
             // Save current volume level before muting
@@ -361,61 +392,17 @@ class LoudnessControllerActivity : BaseActivity() {
                 Timber.d("LoudnessController: Muting system volume during DSP update")
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
                 
-                // Save current settings
-                prefsVar.preferences.edit().apply {
-                    putFloat("loudness_real_volume_db", realVolumeDb)
-                    putFloat("loudness_reference_phon", referencePhon)
-                    apply()
+                // Update LoudnessController with current values
+                with(loudnessController) {
+                    setReferenceLevel(referenceLevel)
+                    setTargetSpl(targetSpl)
+                    setLoudnessEnabled(true)
                 }
                 
-                // Generate filter filename (format matches the asset files)
-                val filterFile = "${targetPhon}-${referencePhon.toInt()}.0_filter.wav"
-                val filterPath = File(getExternalFilesDir(null), "Convolver/$filterFile").absolutePath
+                // The LoudnessController handles all the EEL generation and DSP updates
+                // We don't need to generate files here anymore
+                Timber.d("LoudnessController: Settings applied")
                 
-                // Debug: Log filter path
-                Timber.d("LoudnessController: Filter file = $filterFile")
-                Timber.d("LoudnessController: Filter path = $filterPath")
-                Timber.d("LoudnessController: Checking if filter exists...")
-                val filterFileObj = File(filterPath)
-                Timber.d("LoudnessController: Filter exists = ${filterFileObj.exists()}")
-                
-                // Use pre-bundled EEL file based on reference and target
-                val eelFilename = String.format("loudness_r%d_t%.1f.eel", referencePhon.toInt(), targetPhon)
-                
-                // Only copy the specific EEL file we need (not all 6816 files)
-                val liveprogDir = File(this@LoudnessControllerActivity.getExternalFilesDir(null), "Liveprog")
-                if (!liveprogDir.exists()) {
-                    liveprogDir.mkdirs()
-                }
-                
-                val eelFile = File(liveprogDir, eelFilename)
-                
-                // Copy from assets only if file doesn't exist
-                if (!eelFile.exists()) {
-                    try {
-                        val assetPath = "Liveprog/$eelFilename"
-                        assets.open(assetPath).use { inputStream ->
-                            eelFile.outputStream().use { outputStream ->
-                                inputStream.copyTo(outputStream)
-                            }
-                        }
-                        Timber.d("LoudnessController: Copied EEL file from assets: $assetPath")
-                    } catch (e: Exception) {
-                        Timber.e(e, "LoudnessController: Failed to copy EEL file from assets, generating dynamically")
-                        // Fallback: generate EEL script dynamically
-                        val eelScript = generateEelScript(finalPreamp)
-                        eelFile.writeText(eelScript)
-                    }
-                    
-                    // Clean up old files to save space
-                    cleanupOldEelFiles(liveprogDir, eelFilename)
-                } else {
-                    Timber.d("LoudnessController: EEL file already exists, using cached version")
-                }
-                
-                // Debug: Log EEL file
-                Timber.d("LoudnessController: EEL file = ${eelFile.absolutePath}")
-                Timber.d("LoudnessController: EEL file exists = ${eelFile.exists()}")
                 
                 // Config file generation is kept for debugging/logging purposes
                 // but we'll use direct SharedPreferences setting instead
@@ -439,41 +426,8 @@ class LoudnessControllerActivity : BaseActivity() {
                     Thread.sleep(1000) // Give time for DSP to start
                 }
                 
-                // Instead of using ConfigFileWatcher, directly set preferences like the UI does
-                Timber.d("LoudnessController: Setting Convolver preferences directly")
-                
-                // First disable convolver
-                getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE).edit().apply {
-                    putBoolean(getString(R.string.key_convolver_enable), false)
-                    apply()
-                }
-                sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
-                    putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER))
-                })
-                Thread.sleep(200)
-                
-                // Set convolver file using relative path (like FileLibraryPreference does)
-                val relativeFilterPath = "Convolver/$filterFile"
-                Timber.d("LoudnessController: Setting convolver file to: $relativeFilterPath")
-                getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE).edit().apply {
-                    putBoolean(getString(R.string.key_convolver_enable), true)
-                    putString(getString(R.string.key_convolver_file), relativeFilterPath)
-                    apply()
-                }
-                
-                // Set liveprog file using relative path
-                val relativeLiveprogPath = "Liveprog/$eelFilename"
-                Timber.d("LoudnessController: Setting liveprog file to: $relativeLiveprogPath")
-                getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE).edit().apply {
-                    putBoolean(getString(R.string.key_liveprog_enable), true)
-                    putString(getString(R.string.key_liveprog_file), relativeLiveprogPath)
-                    apply()
-                }
-                
-                // Send broadcast to update both effects
-                sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
-                    putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER, Constants.PREF_LIVEPROG))
-                })
+                // The LoudnessController now handles all DSP configuration
+                // It will update both Convolver and Liveprog settings
                 
                 // Wait 0.5 seconds then restore volume
                 Thread.sleep(500)
@@ -495,10 +449,6 @@ class LoudnessControllerActivity : BaseActivity() {
                 Timber.d("LoudnessController: After config - Liveprog enabled = $liveprogEnabled")
                 Timber.d("LoudnessController: After config - Liveprog file = $liveprogFile")
                 
-                // Debug: Verify files exist before applying
-                Timber.d("LoudnessController: Verifying files before apply...")
-                Timber.d("LoudnessController: Filter file exists = ${File(filterPath).exists()}")
-                Timber.d("LoudnessController: EEL file exists = ${eelFile.exists()}")
                 
                 // Wait a bit more to ensure ConfigFileWatcher has processed everything
                 Thread.sleep(500)
@@ -551,115 +501,13 @@ class LoudnessControllerActivity : BaseActivity() {
         }
     }
     
-    private fun generateEelScript(preampDb: Float): String {
-        return """desc: APO Loudness Auto ${preampDb}dB
-
-@init
-DB_2_LOG = 0.11512925464970228420089957273422;
-gainLin = exp(${preampDb} * DB_2_LOG);
-
-@sample
-spl0 = spl0 * gainLin;
-spl1 = spl1 * gainLin;
-"""
-    }
     
-    private fun generateConfig(realVol: Float, target: Float, reference: Float, preamp: Float, filterFile: String, eelFile: String): String {
-        return """# JamesDSP APO Loudness Auto Configuration
-# Real Volume: $realVol dB SPL
-# Target Phon: $target
-# Reference Phon: ${reference.toInt()}
-# Final Preamp: $preamp dB
-
-# Enable Convolver with the appropriate FIR filter
-Convolver=on
-Convolver.file=Convolver/$filterFile
-
-# Apply preamp gain via Liveprog
-Liveprog=on
-Liveprog.file=$eelFile
-"""
-    }
     
     // Helper functions for loudness calculations
     private fun interpolate(x: Float, x1: Float, x2: Float, y1: Float, y2: Float): Float {
         return y1 + (y2 - y1) * (x - x1) / (x2 - x1)
     }
     
-    private fun getBaseDbSpl(targetPhon: Float): Float {
-        val phons = measuredDbSpl.keys.sorted()
-        
-        // Exact match
-        if (targetPhon in measuredDbSpl) {
-            return measuredDbSpl[targetPhon]!!
-        }
-        
-        // Below minimum
-        if (targetPhon < phons.first()) {
-            return interpolate(targetPhon, phons[0], phons[1], 
-                             measuredDbSpl[phons[0]]!!, measuredDbSpl[phons[1]]!!)
-        }
-        
-        // Above maximum
-        if (targetPhon > phons.last()) {
-            val size = phons.size
-            return interpolate(targetPhon, phons[size-2], phons[size-1],
-                             measuredDbSpl[phons[size-2]]!!, measuredDbSpl[phons[size-1]]!!)
-        }
-        
-        // Interpolate between points
-        for (i in 0 until phons.size - 1) {
-            if (targetPhon >= phons[i] && targetPhon <= phons[i+1]) {
-                return interpolate(targetPhon, phons[i], phons[i+1],
-                                 measuredDbSpl[phons[i]]!!, measuredDbSpl[phons[i+1]]!!)
-            }
-        }
-        
-        return 71.8f // fallback
-    }
-    
-    private fun calculateOffsetEffect(basePreamp: Float, offsetPreamp: Float): Float {
-        val baseRange = (basePreamp + 40.0f) * 2.5f
-        val offsetRange = (offsetPreamp + 40.0f) * 2.5f
-        
-        return if (baseRange > 0 && offsetRange > 0) {
-            20.0f * log10(offsetRange / baseRange)
-        } else {
-            0.0f
-        }
-    }
-    
-    private fun findOptimalOffset(targetPhon: Float, basePreamp: Float, targetRealDbSpl: Float): Float {
-        var bestOffset = 0.0f
-        var minError = 999.0f
-        
-        // Search from -40dB to +30dB in 0.1dB steps (extended range)
-        for (offset in -400..300) {
-            val offsetDb = offset / 10.0f
-            val finalPreamp = basePreamp + offsetDb
-            
-            // Skip if final preamp would be below -40dB
-            if (finalPreamp < -40.0f) continue
-            
-            // Calculate real dB SPL with this offset
-            val baseDbSpl = getBaseDbSpl(targetPhon)
-            val offsetEffect = calculateOffsetEffect(basePreamp, finalPreamp)
-            val realDbSpl = baseDbSpl + offsetEffect
-            
-            val error = abs(realDbSpl - targetRealDbSpl)
-            
-            if (error < minError) {
-                minError = error
-                bestOffset = offsetDb
-            }
-            
-            if (error < 0.1f) { // Early exit if close enough
-                break
-            }
-        }
-        
-        return bestOffset
-    }
     
     private fun getPreamp(listeningLevel: Float, referenceLevel: Float): Float {
         // Since we don't have preamp data for all reference levels (76-89),
@@ -753,28 +601,4 @@ Liveprog.file=$eelFile
         return true
     }
     
-    // Clean up old EEL files keeping only recent ones
-    private fun cleanupOldEelFiles(liveprogDir: File, currentFile: String) {
-        try {
-            val files = liveprogDir.listFiles { file -> 
-                file.extension == "eel" && file.name != currentFile 
-            } ?: emptyArray()
-            
-            val maxCacheSize = 20 // Keep only 20 recent files
-            
-            if (files.size > maxCacheSize) {
-                // Sort by last modified time (oldest first)
-                files.sortBy { it.lastModified() }
-                
-                // Delete oldest files
-                val toDelete = files.size - maxCacheSize
-                for (i in 0 until toDelete) {
-                    files[i].delete()
-                    Timber.d("LoudnessController: Deleted old EEL file: ${files[i].name}")
-                }
-            }
-        } catch (e: Exception) {
-            Timber.e(e, "Error cleaning up old EEL files")
-        }
-    }
 }

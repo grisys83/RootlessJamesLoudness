@@ -114,6 +114,7 @@ abstract class JamesDspBaseEngine(val context: Context, val callbacks: JamesDspW
             val convolverMode = cache.get(R.string.key_convolver_mode, "0").toInt()
 
             val targets = cache.changedNamespaces.toTypedArray() + (forceUpdateNamespaces ?: arrayOf())
+            Timber.d("Total namespaces to sync: ${targets.size} (changed: ${cache.changedNamespaces.size}, forced: ${forceUpdateNamespaces?.size ?: 0})")
             targets.forEach {
                 Timber.i("Committing new changes in namespace '$it'")
 
@@ -127,14 +128,25 @@ abstract class JamesDspBaseEngine(val context: Context, val callbacks: JamesDspW
                     Constants.PREF_STEREOWIDE -> setStereoEnhancement(swEnabled, swMode)
                     Constants.PREF_CROSSFEED -> setCrossfeed(crossfeedEnabled, crossfeedMode)
                     Constants.PREF_TUBE -> setVacuumTube(tubeEnabled, tubeDrive)
-                    Constants.PREF_DDC -> setVdc(ddcEnabled, ddcFile)
-                    Constants.PREF_LIVEPROG -> setLiveprog(liveProgEnabled, liveprogFile)
-                    Constants.PREF_CONVOLVER -> setConvolver(convolverEnabled, convolverFile, convolverMode, convolverAdvImp)
+                    Constants.PREF_DDC -> {
+                        Timber.d("Setting DDC: enabled=$ddcEnabled, file=$ddcFile")
+                        setVdc(ddcEnabled, ddcFile)
+                    }
+                    Constants.PREF_LIVEPROG -> {
+                        Timber.d("Setting Liveprog: enabled=$liveProgEnabled, file=$liveprogFile")
+                        setLiveprog(liveProgEnabled, liveprogFile)
+                    }
+                    Constants.PREF_CONVOLVER -> {
+                        Timber.d("Setting Convolver: enabled=$convolverEnabled, file=$convolverFile")
+                        setConvolver(convolverEnabled, convolverFile, convolverMode, convolverAdvImp)
+                    }
                     else -> true
                 }
 
                 if(!result) {
                     Timber.e("Failed to apply $it")
+                } else {
+                    Timber.d("Successfully applied $it")
                 }
             }
 

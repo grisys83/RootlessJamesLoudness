@@ -1,4 +1,0 @@
-# Convolver with Gain  
-Convolver=on  
-Convolver.file=Convolver/Church.wav  
-Output.gain=10.0  

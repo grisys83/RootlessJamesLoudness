@@ -1,9 +1,0 @@
-desc: APO Loudness R88.0T53.2 (-25.21dB)
-
-@init
-DB_2_LOG = 0.11512925464970228420089957273422;
-gainLin = exp(-25.21 * DB_2_LOG);
-
-@sample
-spl0 *= gainLin;
-spl1 *= gainLin;

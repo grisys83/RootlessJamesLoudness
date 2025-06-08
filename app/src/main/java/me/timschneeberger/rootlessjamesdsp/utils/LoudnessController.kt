@@ -5,6 +5,7 @@ import android.media.AudioManager
 import android.os.Build
 import androidx.core.content.getSystemService
 import me.timschneeberger.rootlessjamesdsp.R
+import me.timschneeberger.rootlessjamesdsp.utils.Constants
 import me.timschneeberger.rootlessjamesdsp.utils.extensions.ContextExtensions.sendLocalBroadcast
 import me.timschneeberger.rootlessjamesdsp.utils.preferences.Preferences
 import org.koin.core.component.KoinComponent
@@ -13,6 +14,8 @@ import timber.log.Timber
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.abs
+import java.io.File
 
 /**
  * LoudnessController implements APO Loudness-like functionality for Android
@@ -38,23 +41,48 @@ class LoudnessController(private val context: Context) : KoinComponent {
         const val REFERENCE_LEVEL_77_DB_SPL = -26.0f  // Home theater reference (77 dB SPL)
         
         // Default values
-        const val DEFAULT_REFERENCE_LEVEL = REFERENCE_LEVEL_77_DB_SPL
-        const val DEFAULT_REAL_VOLUME_PERCENT = 50
+        const val DEFAULT_REFERENCE_LEVEL = 75.0f  // Default reference phon
         
         // Keys for SharedPreferences
         const val KEY_REFERENCE_LEVEL = "loudness_reference_level"
-        const val KEY_REAL_VOLUME_PERCENT = "loudness_real_volume_percent"
         const val KEY_LOUDNESS_ENABLED = "loudness_enabled"
+        const val KEY_TARGET_SPL = "loudness_target_spl"
+        const val KEY_CALIBRATION_OFFSET = "loudness_calibration_offset"
         
-        // Volume step sizes
-        const val VOLUME_STEP_PERCENT = 2
+        // Reference step size
         const val REFERENCE_STEP_DB = 1.0f
+        
+        // Preamp lookup table from preamp_data_v032.h
+        // This is the actual preamp applied by the FIR filters
+        private val filterPreampTable = mapOf(
+            75f to mapOf(
+                40f to -25.06f, 45f to -22.82f, 50f to -20.60f, 55f to -18.43f, 
+                60f to -16.29f, 65f to -14.13f, 67f to -13.28f, 70f to -12.02f, 
+                75f to -10.00f, 80f to -8.07f, 85f to -6.24f, 90f to -4.50f
+            ),
+            80f to mapOf(
+                40f to -27.72f, 45f to -25.48f, 50f to -23.26f, 55f to -21.08f,
+                60f to -18.95f, 65f to -16.79f, 67f to -15.94f, 70f to -14.68f,
+                75f to -12.66f, 80f to -10.73f, 85f to -8.90f, 90f to -7.16f
+            ),
+            85f to mapOf(
+                40f to -30.18f, 45f to -27.94f, 50f to -25.72f, 55f to -23.54f,
+                60f to -21.40f, 65f to -19.25f, 67f to -18.40f, 70f to -17.14f,
+                75f to -15.12f, 80f to -13.19f, 85f to -11.36f, 90f to -9.62f
+            ),
+            90f to mapOf(
+                40f to -32.48f, 45f to -30.24f, 50f to -28.02f, 55f to -25.84f,
+                60f to -23.71f, 65f to -21.55f, 67f to -20.70f, 70f to -19.44f,
+                75f to -17.42f, 80f to -15.49f, 85f to -13.66f, 90f to -11.92f
+            )
+        )
     }
     
     // Current state
     private var referenceLevel: Float = DEFAULT_REFERENCE_LEVEL
-    private var realVolumePercent: Int = DEFAULT_REAL_VOLUME_PERCENT
     private var loudnessEnabled: Boolean = false
+    private var targetSpl: Float = 60.0f
+    private var calibrationOffset: Float = 0.0f
     
     init {
         loadSettings()
@@ -77,69 +105,27 @@ class LoudnessController(private val context: Context) : KoinComponent {
      */
     
     /**
-     * Get current real volume in percentage (0-100)
-     * Combines system volume and DSP gain
+     * Get target SPL value
      */
-    fun getRealVolumePercent(): Int {
-        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        
-        // Convert to percentage
-        val systemVolumePercent = (currentVolume * 100.0f / maxVolume).roundToInt()
-        
-        // Get DSP output gain
-        val outputGain = getOutputGain()
-        
-        // Combine system volume with DSP gain
-        // DSP gain modifies the effective volume
-        val gainMultiplier = 10.0f.pow(outputGain / 20.0f)
-        val effectivePercent = (systemVolumePercent * gainMultiplier).roundToInt()
-        
-        return effectivePercent.coerceIn(0, 100)
+    fun getTargetSpl(): Float {
+        return targetSpl
     }
     
     /**
-     * Set real volume in percentage (0-100)
-     * Distributes between system volume and DSP gain
+     * Get calibration offset
      */
-    fun setRealVolumePercent(percent: Int) {
-        val clampedPercent = percent.coerceIn(0, 100)
-        realVolumePercent = clampedPercent
-        
-        // Strategy: Use system volume for coarse adjustment, DSP gain for fine adjustment
-        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        
-        if (clampedPercent <= 85) {
-            // For normal listening levels, use system volume primarily
-            val targetSystemVolume = (clampedPercent * maxVolume / 100.0f).roundToInt()
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetSystemVolume, 0)
-            setOutputGain(0.0f) // No additional gain needed
-        } else {
-            // For high levels, max out system volume and use DSP gain
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, maxVolume, 0)
-            
-            // Calculate required gain for levels above 85%
-            val excessPercent = clampedPercent - 85
-            val additionalGain = (excessPercent * 15.0f / 15.0f) // Map 85-100% to 0-15dB
-            setOutputGain(additionalGain)
-        }
-        
+    fun getCalibrationOffset(): Float {
+        return calibrationOffset
+    }
+    
+    /**
+     * Perform calibration
+     */
+    fun performCalibration(measuredSpl: Float, expectedSpl: Float) {
+        // Calibration offset = measured - expected
+        calibrationOffset = measuredSpl - expectedSpl
         saveSettings()
-        applyLoudnessCompensation()
-    }
-    
-    /**
-     * Increase real volume by one step
-     */
-    fun increaseRealVolume() {
-        setRealVolumePercent(getRealVolumePercent() + VOLUME_STEP_PERCENT)
-    }
-    
-    /**
-     * Decrease real volume by one step
-     */
-    fun decreaseRealVolume() {
-        setRealVolumePercent(getRealVolumePercent() - VOLUME_STEP_PERCENT)
+        updateLoudness()
     }
     
     /**
@@ -153,9 +139,9 @@ class LoudnessController(private val context: Context) : KoinComponent {
      * Set reference level in dB (LUFS)
      */
     fun setReferenceLevel(level: Float) {
-        referenceLevel = level.coerceIn(-40.0f, -10.0f)
+        referenceLevel = level.coerceIn(75.0f, 90.0f)  // Changed range to match phon values
         saveSettings()
-        applyLoudnessCompensation()
+        updateLoudness()
     }
     
     /**
@@ -178,135 +164,191 @@ class LoudnessController(private val context: Context) : KoinComponent {
     fun setLoudnessEnabled(enabled: Boolean) {
         loudnessEnabled = enabled
         saveSettings()
-        applyLoudnessCompensation()
+        updateLoudness()
     }
     
     /**
-     * Apply loudness compensation based on current volume and reference level
-     * This implements equal-loudness contours (ISO 226:2003)
+     * Set target SPL
      */
-    private fun applyLoudnessCompensation() {
+    fun setTargetSpl(spl: Float) {
+        targetSpl = spl.coerceIn(0f, 125f)
+        saveSettings()
+        updateLoudness()
+    }
+    
+    /**
+     * Set calibration offset
+     */
+    fun setCalibrationOffset(offset: Float) {
+        calibrationOffset = offset.coerceIn(-30f, 30f)
+        saveSettings()
+        updateLoudness()
+    }
+    
+    /**
+     * Get loudness enabled state
+     */
+    fun isLoudnessEnabled(): Boolean {
+        return loudnessEnabled
+    }
+    
+    /**
+     * Generate EEL script content for the calculated gain
+     */
+    private fun generateEelScript(totalGainDb: Float): String {
+        return """
+desc: Calibrated Loudness Gain
+
+@init
+DB_2_LOG = 0.11512925464970228420089957273422;
+gainLin = exp($totalGainDb * DB_2_LOG);
+
+@sample
+spl0 *= gainLin;
+spl1 *= gainLin;
+""".trimIndent()
+    }
+    
+    /**
+     * Save EEL file to external app storage
+     */
+    private fun saveEelFile(content: String) {
+        try {
+            val file = File(context.getExternalFilesDir(null), "Liveprog/loudnessCalibrated.eel")
+            file.parentFile?.mkdirs()
+            file.writeText(content)
+            Timber.d("Saved EEL file: ${file.absolutePath}")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to save EEL file")
+        }
+    }
+    
+    /**
+     * Get FIR filter preamp compensation value
+     */
+    private fun getFirPreampForLevel(referenceLevel: Float, targetSpl: Float): Float {
+        // Find the closest reference level
+        val refKey = filterPreampTable.keys.minByOrNull { abs(it - referenceLevel) } ?: 75f
+        val refTable = filterPreampTable[refKey] ?: return 0f
+        
+        // Find the two closest target SPL values for interpolation
+        val sortedTargets = refTable.keys.sorted()
+        val lowerTarget = sortedTargets.lastOrNull { it <= targetSpl } ?: sortedTargets.first()
+        val upperTarget = sortedTargets.firstOrNull { it >= targetSpl } ?: sortedTargets.last()
+        
+        return if (lowerTarget == upperTarget) {
+            refTable[lowerTarget] ?: 0f
+        } else {
+            // Linear interpolation
+            val lowerValue = refTable[lowerTarget] ?: 0f
+            val upperValue = refTable[upperTarget] ?: 0f
+            val ratio = (targetSpl - lowerTarget) / (upperTarget - lowerTarget)
+            lowerValue + (upperValue - lowerValue) * ratio
+        }
+    }
+    
+    /**
+     * Update loudness with calibration
+     */
+    fun updateLoudness() {
         if (!loudnessEnabled) {
-            // Disable all loudness processing
-            resetLoudnessFilters()
+            disableLoudness()
             return
         }
         
-        // Calculate SPL at current volume
-        val currentSPL = calculateCurrentSPL()
+        // Ensure DSP master switch is on
+        val masterEnabled = preferences.preferences.getBoolean(context.getString(R.string.key_powered_on), false)
+        if (!masterEnabled) {
+            Timber.d("DSP master switch is off, turning it on")
+            preferences.preferences.edit()
+                .putBoolean(context.getString(R.string.key_powered_on), true)
+                .apply()
+            context.sendLocalBroadcast(android.content.Intent(Constants.ACTION_PREFERENCES_UPDATED))
+        }
         
-        // Calculate compensation needed
-        val compensation = calculateLoudnessCompensation(currentSPL, referenceLevel)
+        // Real vol is the user's target SPL (what they set with the slider)
+        val realVol = targetSpl
         
-        // Apply compensation via graphic EQ or parametric EQ
-        applyCompensationFilters(compensation)
+        // User wanted gain (additional adjustment, default 0)
+        val userGain = preferences.preferences.getFloat("loudness_user_gain", 0.0f)
         
-        Timber.d("Loudness compensation applied: SPL=$currentSPL, Reference=$referenceLevel")
+        // For FIR filter selection, clamp to available range (40-90)
+        val clampedTargetForFir = targetSpl.coerceIn(40f, 90f)
+        
+        // Get FIR preamp for the clamped target
+        val firPreamp = getFirPreampForLevel(referenceLevel, clampedTargetForFir)
+        
+        // Calculate Total EEL Gain
+        // Since FIR filters are normalized at 1kHz, they only apply frequency shaping
+        // The preamp compensates for the overall gain change from that shaping
+        // Formula: -calibOffset + firPreamp + userGain
+        val totalEelGain = -calibrationOffset + firPreamp + userGain
+        
+        Timber.d("Loudness update: realVol=$realVol, referenceLevel=$referenceLevel, firPreamp=$firPreamp, calibOffset=$calibrationOffset, userGain=$userGain, totalEelGain=$totalEelGain")
+        
+        // Generate EEL script
+        val eelScript = generateEelScript(totalEelGain)
+        
+        // Save EEL file
+        saveEelFile(eelScript)
+        
+        // Update DSP to use the new EEL script
+        updateLoudnessConfig("Liveprog: loudnessCalibrated.eel")
     }
     
     /**
-     * Calculate current SPL based on volume and system calibration
+     * Disable loudness processing
      */
-    private fun calculateCurrentSPL(): Float {
-        val volumePercent = getRealVolumePercent()
+    private fun disableLoudness() {
+        // Save a bypass EEL script
+        val bypassScript = """
+desc: Loudness Bypass
+
+@init
+gainLin = 1.0;
+
+@sample
+spl0 *= gainLin;
+spl1 *= gainLin;
+""".trimIndent()
         
-        // Assume 0% = silence, 100% = reference level SPL
-        // This needs calibration for each device
-        val maxSPL = when (referenceLevel) {
-            REFERENCE_LEVEL_83_DB_SPL -> 83.0f
-            REFERENCE_LEVEL_85_DB_SPL -> 85.0f
-            REFERENCE_LEVEL_77_DB_SPL -> 77.0f
-            else -> 77.0f // Default
-        }
-        
-        // Convert percentage to SPL (logarithmic)
-        return if (volumePercent > 0) {
-            maxSPL + 20.0f * log10(volumePercent / 100.0f)
-        } else {
-            0.0f // Silence
-        }
-    }
-    
-    /**
-     * Calculate loudness compensation based on equal-loudness contours
-     */
-    private fun calculateLoudnessCompensation(currentSPL: Float, targetLUFS: Float): LoudnessCompensation {
-        // Simplified equal-loudness contour implementation
-        // In reality, this should use ISO 226:2003 curves
-        
-        val splDifference = 77.0f - currentSPL // Difference from reference
-        
-        // Bass compensation (more needed at lower volumes)
-        val bassBoost = when {
-            splDifference > 20 -> 12.0f
-            splDifference > 10 -> 8.0f
-            splDifference > 0 -> 4.0f
-            else -> 0.0f
-        }
-        
-        // Treble compensation (less pronounced than bass)
-        val trebleBoost = when {
-            splDifference > 20 -> 6.0f
-            splDifference > 10 -> 4.0f
-            splDifference > 0 -> 2.0f
-            else -> 0.0f
-        }
-        
-        return LoudnessCompensation(
-            bassGain = bassBoost,
-            trebleGain = trebleBoost,
-            midGain = 0.0f // Mids typically need less compensation
-        )
-    }
-    
-    /**
-     * Apply compensation using the DSP's graphic EQ
-     */
-    private fun applyCompensationFilters(compensation: LoudnessCompensation) {
-        // This would integrate with JamesDSP's graphic EQ
-        // For now, we'll update the config file
-        
-        val loudnessEQ = buildString {
-            append("# Loudness Compensation (Auto-generated)\n")
-            append("# Reference Level: $referenceLevel dB\n")
-            append("# Current Volume: $realVolumePercent%\n\n")
-            
-            // Apply compensation curve
-            append("GraphicEQ: enabled bands=\"")
-            append("31 ${compensation.bassGain}; ")
-            append("62 ${compensation.bassGain * 0.9f}; ")
-            append("125 ${compensation.bassGain * 0.7f}; ")
-            append("250 ${compensation.bassGain * 0.5f}; ")
-            append("500 ${compensation.midGain}; ")
-            append("1000 ${compensation.midGain}; ")
-            append("2000 ${compensation.midGain}; ")
-            append("4000 ${compensation.trebleGain * 0.5f}; ")
-            append("8000 ${compensation.trebleGain * 0.7f}; ")
-            append("16000 ${compensation.trebleGain}\"")
-        }
-        
-        // Write to config file or update SharedPreferences
-        updateLoudnessConfig(loudnessEQ)
-    }
-    
-    /**
-     * Reset loudness filters to flat response
-     */
-    private fun resetLoudnessFilters() {
-        val flatEQ = "GraphicEQ: disabled"
-        updateLoudnessConfig(flatEQ)
+        saveEelFile(bypassScript)
+        updateLoudnessConfig("Liveprog: loudnessCalibrated.eel")
     }
     
     /**
      * Update loudness configuration
      */
     private fun updateLoudnessConfig(config: String) {
-        // This would write to the config file or update SharedPreferences
-        // For now, just log it
-        Timber.d("Loudness config update:\n$config")
+        // Clamp target SPL to available filter range (40-90)
+        val clampedTargetSpl = targetSpl.coerceIn(40f, 90f)
         
-        // Send broadcast to reload DSP settings
-        context.sendLocalBroadcast(android.content.Intent(Constants.ACTION_PREFERENCES_UPDATED))
+        // Select appropriate FIR filter file based on target SPL and reference level
+        val filterFile = String.format("%.1f-%.1f_filter.wav", clampedTargetSpl, referenceLevel)
+        val filterPath = "Convolver/$filterFile"
+        
+        // Enable Convolver with the selected FIR filter
+        val convolverPrefs = context.getSharedPreferences(Constants.PREF_CONVOLVER, Context.MODE_PRIVATE)
+        convolverPrefs.edit().apply {
+            putBoolean(context.getString(R.string.key_convolver_enable), true)
+            putString(context.getString(R.string.key_convolver_file), filterPath)
+            apply()
+        }
+        
+        // Enable Liveprog with the calibrated EEL file
+        val liveprogPrefs = context.getSharedPreferences(Constants.PREF_LIVEPROG, Context.MODE_PRIVATE)
+        liveprogPrefs.edit().apply {
+            putBoolean(context.getString(R.string.key_liveprog_enable), true)
+            putString(context.getString(R.string.key_liveprog_file), "Liveprog/loudnessCalibrated.eel")
+            apply()
+        }
+        
+        Timber.d("Loudness config update: FIR=$filterPath, EEL=loudnessCalibrated.eel, config=$config")
+        
+        // Send broadcast to reload DSP settings for both effects
+        context.sendLocalBroadcast(android.content.Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+            putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER, Constants.PREF_LIVEPROG))
+        })
     }
     
     /**
@@ -334,8 +376,9 @@ class LoudnessController(private val context: Context) : KoinComponent {
     private fun saveSettings() {
         preferences.preferences.edit().apply {
             putFloat(KEY_REFERENCE_LEVEL, referenceLevel)
-            putInt(KEY_REAL_VOLUME_PERCENT, realVolumePercent)
             putBoolean(KEY_LOUDNESS_ENABLED, loudnessEnabled)
+            putFloat(KEY_TARGET_SPL, targetSpl)
+            putFloat(KEY_CALIBRATION_OFFSET, calibrationOffset)
             apply()
         }
     }
@@ -346,17 +389,9 @@ class LoudnessController(private val context: Context) : KoinComponent {
     private fun loadSettings() {
         preferences.preferences.apply {
             referenceLevel = getFloat(KEY_REFERENCE_LEVEL, DEFAULT_REFERENCE_LEVEL)
-            realVolumePercent = getInt(KEY_REAL_VOLUME_PERCENT, DEFAULT_REAL_VOLUME_PERCENT)
             loudnessEnabled = getBoolean(KEY_LOUDNESS_ENABLED, false)
+            targetSpl = getFloat(KEY_TARGET_SPL, 60.0f)
+            calibrationOffset = getFloat(KEY_CALIBRATION_OFFSET, 0.0f)
         }
     }
-    
-    /**
-     * Data class for loudness compensation values
-     */
-    data class LoudnessCompensation(
-        val bassGain: Float,
-        val trebleGain: Float,
-        val midGain: Float
-    )
 }

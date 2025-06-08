@@ -1,4 +1,0 @@
-# Loudness: FIR + GraphicEQ  
-Convolver=on  
-Convolver.file=LoudnessFilters/60.0-83.0_filter.wav  
-Output.gain=-10.0  

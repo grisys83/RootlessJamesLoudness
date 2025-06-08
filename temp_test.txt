@@ -1,2 +1,0 @@
-# Test with existing working script  
-Liveprog: enabled file=\Liveprog/stereowide.eel\  

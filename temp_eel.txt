@@ -1,2 +1,0 @@
-# EEL Loudness Test  
-Liveprog: enabled file=\Liveprog/loudnessTest.eel\  

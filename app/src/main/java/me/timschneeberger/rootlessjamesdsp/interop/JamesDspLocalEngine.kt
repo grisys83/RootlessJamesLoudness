@@ -10,7 +10,9 @@ import java.util.Timer
 import kotlin.concurrent.schedule
 
 class JamesDspLocalEngine(context: Context, callbacks: JamesDspWrapper.JamesDspCallbacks? = null) : JamesDspBaseEngine(context, callbacks) {
-    var handle: JamesDspHandle = JamesDspWrapper.alloc(callbacks ?: DummyCallbacks())
+    var handle: JamesDspHandle = JamesDspWrapper.alloc(callbacks ?: DummyCallbacks()).also {
+        Timber.d("JamesDspLocalEngine created with handle: $it")
+    }
 
     override var sampleRate: Float
         set(value) {
@@ -141,6 +143,11 @@ class JamesDspLocalEngine(context: Context, callbacks: JamesDspWrapper.JamesDspC
     }
 
     override fun setVdcInternal(enable: Boolean, vdc: String): Boolean {
+        Timber.d("setVdcInternal: enable=$enable, vdc length=${vdc.length}, handle=$handle")
+        if (handle == 0L) {
+            Timber.e("setVdcInternal: Invalid handle!")
+            return false
+        }
         return JamesDspWrapper.setVdc(handle, enable, vdc)
     }
 
@@ -151,14 +158,29 @@ class JamesDspLocalEngine(context: Context, callbacks: JamesDspWrapper.JamesDspC
         irFrames: Int,
         irCrc: Int
     ): Boolean {
+        Timber.d("setConvolverInternal: enable=$enable, irChannels=$irChannels, irFrames=$irFrames, handle=$handle")
+        if (handle == 0L) {
+            Timber.e("setConvolverInternal: Invalid handle!")
+            return false
+        }
         return JamesDspWrapper.setConvolver(handle, enable, impulseResponse, irChannels, irFrames)
     }
 
     override fun setGraphicEqInternal(enable: Boolean, bands: String): Boolean {
+        Timber.d("setGraphicEqInternal: enable=$enable, bands length=${bands.length}, handle=$handle")
+        if (handle == 0L) {
+            Timber.e("setGraphicEqInternal: Invalid handle!")
+            return false
+        }
         return JamesDspWrapper.setGraphicEq(handle, enable, bands)
     }
 
     override fun setLiveprogInternal(enable: Boolean, name: String, script: String): Boolean {
+        Timber.d("setLiveprogInternal: enable=$enable, name=$name, script length=${script.length}, handle=$handle")
+        if (handle == 0L) {
+            Timber.e("setLiveprogInternal: Invalid handle!")
+            return false
+        }
         return JamesDspWrapper.setLiveprog(handle, enable, name, script)
     }
 

@@ -507,17 +507,10 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
      * Apply loudness filter based on current system volume
      */
     private fun applyAutoLoudnessFilter() {
-        val currentVolume = loudnessController?.getRealVolumePercent() ?: 50
+        // Get target SPL directly from loudness controller
+        val targetSPL = loudnessController?.getTargetSpl() ?: 60.0f
         
-        // Map volume percentage to listening SPL
-        val listeningSPL = when {
-            currentVolume < 30 -> 50.0f  // Very quiet
-            currentVolume < 50 -> 60.0f  // Moderate
-            currentVolume < 70 -> 70.0f  // Normal
-            else -> 80.0f  // Loud
-        }
-        
-        applyLoudnessFilterForVolume(listeningSPL)
+        applyLoudnessFilterForVolume(targetSPL)
     }
     
     /**
