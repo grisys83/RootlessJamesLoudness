@@ -58,3 +58,4 @@ loudness_termux.sh
 # Copy script
 copy_eel_to_assets.sh
 cleanup_eel_script.sh
+pluto_share.txt
