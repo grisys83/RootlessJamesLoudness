@@ -55,6 +55,18 @@ class LoudnessControllerActivity : AppCompatActivity() {
     // Inject preferences using Koin
     private val prefsApp: Preferences.App by inject()
     
+    private fun triggerLoudnessNotificationUpdate() {
+        try {
+            // Send broadcast to trigger service update
+            val intent = Intent("me.timschneeberger.rootlessjamesdsp.LOUDNESS_NOTIFICATION_UPDATE")
+            intent.setPackage(packageName)
+            sendBroadcast(intent)
+            Timber.d("Triggered loudness notification update broadcast")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to trigger loudness notification update")
+        }
+    }
+    
     companion object {
         // Volume range constants
         const val MIN_VOLUME_DB = 0.0f  // Start from 0 dB for measurement
@@ -83,6 +95,15 @@ class LoudnessControllerActivity : AppCompatActivity() {
     private lateinit var firCompensationSwitch: com.google.android.material.switchmaterial.SwitchMaterial
     private lateinit var rmsOffsetSlider: Slider
     private lateinit var rmsOffsetValueText: MaterialTextView
+    
+    // Safe Volume UI Components
+    private lateinit var safeVolumeSwitch: com.google.android.material.switchmaterial.SwitchMaterial
+    private lateinit var safetyLevelsCard: View
+    private lateinit var volumeStatusLayout: LinearLayout
+    private lateinit var alarmVolumeText: MaterialTextView
+    private lateinit var ringtoneVolumeText: MaterialTextView
+    private lateinit var notificationVolumeText: MaterialTextView
+    private lateinit var volumeReductionStatusText: MaterialTextView
     
     // New calibration buttons
     private lateinit var prepareMaxSplButton: MaterialButton
@@ -119,6 +140,9 @@ class LoudnessControllerActivity : AppCompatActivity() {
     
     // Audio manager for volume control
     private lateinit var audioManager: AudioManager
+    
+    // Volume monitoring
+    private var volumeMonitorJob: Job? = null
     
     // Loudness controller - lazy initialization to ensure Koin is ready
     private val loudnessController: me.timschneeberger.rootlessjamesdsp.utils.LoudnessController by lazy {
@@ -175,9 +199,9 @@ class LoudnessControllerActivity : AppCompatActivity() {
         try {
             setupToolbar()
             setupSliders()
-            Timber.d("LoudnessControllerActivity: Toolbar and sliders setup completed")
+            Timber.d("LoudnessControllerActivity: UI setup completed")
         } catch (e: Exception) {
-            Timber.e(e, "Failed to setup toolbar or sliders")
+            Timber.e(e, "Failed to setup UI components")
         }
         
         // Delay controller-dependent initialization to ensure views and Koin are ready
@@ -185,15 +209,29 @@ class LoudnessControllerActivity : AppCompatActivity() {
             try {
                 // Add a small delay to ensure all views are fully initialized
                 window.decorView.postDelayed({
-                    setupCalibration()
+                    // Load settings FIRST (especially calibration values)
                     loadCurrentSettings()
+                    
+                    // Setup calibration AFTER loading settings
+                    setupCalibration()
+                    
+                    // Initial visibility setup for FIR Compensation dependent elements
+                    val isFirEnabled = loudnessController.isFirCompensationEnabled()
+                    safeTimeText.visibility = if (isFirEnabled) View.VISIBLE else View.GONE
+                    safetyLevelsCard.visibility = if (isFirEnabled) View.VISIBLE else View.GONE
+                    
                     updateDisplay()
                     
-                    // Force update loudness configuration to ensure correct filter is selected
-                    if (loudnessController.isLoudnessEnabled()) {
-                        Timber.d("Forcing loudness update on activity start")
-                        loudnessController.updateLoudness()
-                    }
+                    // Log loaded settings for debugging (in loading order)
+                    Timber.d("Activity started with loaded settings (load order: calibration → other settings):")
+                    Timber.d("  1. Calibration offset: $calibrationOffset")
+                    Timber.d("  2. Max SPL: $maxDynamicSpl")
+                    Timber.d("  3. Target phon: $targetPhon (slider max: ${realVolumeSlider.valueTo})")
+                    Timber.d("  4. Reference phon: $referencePhon")
+                    Timber.d("  5. RMS offset: ${loudnessController.getRmsOffset()}")
+                    Timber.d("  6. Loudness enabled: ${loudnessController.isLoudnessEnabled()}")
+                    Timber.d("  7. Auto reference: ${loudnessController.isAutoReferenceEnabled()}")
+                    Timber.d("  8. FIR compensation: ${loudnessController.isFirCompensationEnabled()}")
                 }, 100)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to initialize loudness controller components")
@@ -254,6 +292,15 @@ class LoudnessControllerActivity : AppCompatActivity() {
         firCompensationSwitch = findViewById(R.id.fir_compensation_switch)
         rmsOffsetSlider = findViewById(R.id.rms_offset_slider)
         rmsOffsetValueText = findViewById(R.id.rms_offset_value_text)
+        
+        // Initialize safe volume UI components
+        safeVolumeSwitch = findViewById(R.id.safe_volume_switch)
+        safetyLevelsCard = findViewById(R.id.safety_levels_card)
+        volumeStatusLayout = findViewById(R.id.volume_status_layout)
+        alarmVolumeText = findViewById(R.id.alarm_volume_text)
+        ringtoneVolumeText = findViewById(R.id.ringtone_volume_text)
+        notificationVolumeText = findViewById(R.id.notification_volume_text)
+        volumeReductionStatusText = findViewById(R.id.volume_reduction_status_text)
     }
     
     private fun setupToolbar() {
@@ -302,6 +349,8 @@ class LoudnessControllerActivity : AppCompatActivity() {
                 override fun onStopTrackingTouch(slider: Slider) {
                     // Apply immediately when user releases the slider
                     applyLoudnessSettings()
+                    // Force preference refresh to ensure UI is updated
+                    sendPreferenceRefreshBroadcast()
                 }
             })
         }
@@ -331,6 +380,8 @@ class LoudnessControllerActivity : AppCompatActivity() {
                 override fun onStopTrackingTouch(slider: Slider) {
                     // Apply immediately when user releases the slider
                     applyLoudnessSettings()
+                    // Force preference refresh to ensure UI is updated
+                    sendPreferenceRefreshBroadcast()
                 }
             })
         }
@@ -359,6 +410,15 @@ class LoudnessControllerActivity : AppCompatActivity() {
         firCompensationSwitch.setOnCheckedChangeListener { _, isChecked ->
             loudnessController.setFirCompensationEnabled(isChecked)
             updateDisplay()
+            // Show/hide Safety Levels card based on FIR Compensation state
+            safetyLevelsCard.visibility = if (isChecked) View.VISIBLE else View.GONE
+        }
+        
+        // Setup Safe Volume switch
+        safeVolumeSwitch.setOnCheckedChangeListener { _, isChecked ->
+            val safeVolumeManager = loudnessController.getSafeVolumeManager()
+            safeVolumeManager.setSafeVolumeEnabled(isChecked)
+            updateVolumeStatus()
         }
         
         // Setup RMS offset slider
@@ -487,21 +547,9 @@ class LoudnessControllerActivity : AppCompatActivity() {
     
     private fun loadCurrentSettings() {
         try {
-            // Load saved settings with safe access
-            targetPhon = try {
-                loudnessController.getTargetPhon()
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to get target SPL from controller")
-                DEFAULT_VOLUME_DB
-            }
+            // IMPORTANT: Load calibration values FIRST as they affect other settings
             
-            referencePhon = try {
-                loudnessController.getReferencePhon()
-            } catch (e: Exception) {
-                Timber.e(e, "Failed to get reference level from controller")
-                DEFAULT_REFERENCE_PHON
-            }
-            
+            // 1. Load calibration offset first
             calibrationOffset = try {
                 loudnessController.getCalibrationOffset()
             } catch (e: Exception) {
@@ -509,6 +557,7 @@ class LoudnessControllerActivity : AppCompatActivity() {
                 0.0f
             }
             
+            // 2. Load max SPL - this is critical as it affects slider ranges
             maxDynamicSpl = try {
                 loudnessController.getMaxSpl()
             } catch (e: Exception) {
@@ -516,8 +565,24 @@ class LoudnessControllerActivity : AppCompatActivity() {
                 MAX_VOLUME_DB
             }
             
-            // Update slider range based on max SPL
+            // 3. Update slider range BEFORE loading target value
             realVolumeSlider.valueTo = maxDynamicSpl
+            
+            // 4. Now load target phon (after slider range is set)
+            targetPhon = try {
+                loudnessController.getTargetPhon()
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to get target SPL from controller")
+                DEFAULT_VOLUME_DB
+            }
+            
+            // 5. Load reference phon
+            referencePhon = try {
+                loudnessController.getReferencePhon()
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to get reference level from controller")
+                DEFAULT_REFERENCE_PHON
+            }
             
             // Load auto reference state
             autoReferenceSwitch.isChecked = loudnessController.isAutoReferenceEnabled()
@@ -526,14 +591,30 @@ class LoudnessControllerActivity : AppCompatActivity() {
             // Load FIR compensation state
             firCompensationSwitch.isChecked = loudnessController.isFirCompensationEnabled()
             
+            // Show/hide Safety Levels card based on FIR Compensation state
+            safetyLevelsCard.visibility = if (loudnessController.isFirCompensationEnabled()) View.VISIBLE else View.GONE
+            
             // Load RMS offset
             val rmsOffset = loudnessController.getRmsOffset()
             rmsOffsetSlider.value = rmsOffset
             rmsOffsetValueText.text = String.format("-%d dB", rmsOffset.toInt())
             
+            // Load safe volume settings
+            val safeVolumeManager = loudnessController.getSafeVolumeManager()
+            safeVolumeSwitch.isChecked = safeVolumeManager.isSafeVolumeEnabled()
+            updateVolumeStatus()
+            
             // Round values to match step size and ensure they're within bounds
-            realVolumeSlider.value = ((targetPhon * 10).roundToInt() / 10f).coerceIn(realVolumeSlider.valueFrom, realVolumeSlider.valueTo)
-            realVolumeValueText.text = String.format("%.1f", targetPhon)
+            // IMPORTANT: Use the updated slider range (valueTo was set based on maxDynamicSpl)
+            val clampedTargetPhon = ((targetPhon * 10).roundToInt() / 10f).coerceIn(realVolumeSlider.valueFrom, realVolumeSlider.valueTo)
+            realVolumeSlider.value = clampedTargetPhon
+            realVolumeValueText.text = String.format("%.1f", clampedTargetPhon)
+            
+            // Update the actual target phon if it was clamped
+            if (clampedTargetPhon != targetPhon) {
+                Timber.d("Target phon was clamped from $targetPhon to $clampedTargetPhon due to max SPL limit")
+                targetPhon = clampedTargetPhon
+            }
             
             // Ensure reference phon is within slider bounds (75-90)
             val clampedReferencePhon = referencePhon.roundToInt().toFloat().coerceIn(75.0f, 90.0f)
@@ -564,6 +645,61 @@ class LoudnessControllerActivity : AppCompatActivity() {
         
         // Update calculation details
         updateCalculationDetails(firCompensation)
+    }
+    
+    private fun updateVolumeStatus() {
+        val safeVolumeManager = loudnessController.getSafeVolumeManager()
+        val volumeInfo = safeVolumeManager.getVolumeInfo()
+        val isLoudnessEnabled = loudnessController.isLoudnessEnabled()
+        val areVolumesReduced = safeVolumeManager.areVolumesReduced()
+        
+        // Show volume status layout when safe volume is enabled
+        volumeStatusLayout.visibility = if (safeVolumeSwitch.isChecked) View.VISIBLE else View.GONE
+        
+        // Update volume displays
+        volumeInfo["Alarm"]?.let { info ->
+            val text = if (areVolumesReduced) {
+                "${info.current}/${info.max} (was ${info.original})"
+            } else {
+                "${info.current}/${info.max}"
+            }
+            alarmVolumeText.text = text
+        }
+        
+        volumeInfo["Ringtone"]?.let { info ->
+            val text = if (areVolumesReduced) {
+                "${info.current}/${info.max} (was ${info.original})"
+            } else {
+                "${info.current}/${info.max}"
+            }
+            ringtoneVolumeText.text = text
+        }
+        
+        volumeInfo["Notification"]?.let { info ->
+            val text = if (areVolumesReduced) {
+                "${info.current}/${info.max} (was ${info.original})"
+            } else {
+                "${info.current}/${info.max}"
+            }
+            notificationVolumeText.text = text
+        }
+        
+        // Update reduction status
+        volumeReductionStatusText.text = when {
+            !safeVolumeSwitch.isChecked -> "Safe volume protection disabled"
+            !isLoudnessEnabled -> "Volume reduction inactive (loudness disabled)"
+            areVolumesReduced -> "Volumes reduced to 15% for hearing protection"
+            else -> "Volume reduction ready (will activate with loudness)"
+        }
+        
+        // Update text color based on status
+        volumeReductionStatusText.setTextColor(
+            when {
+                areVolumesReduced -> android.graphics.Color.parseColor("#4CAF50") // Green
+                isLoudnessEnabled -> android.graphics.Color.parseColor("#FFC107") // Amber
+                else -> android.graphics.Color.GRAY
+            }
+        )
     }
     
     private fun updateReferenceSliderRange() {
@@ -627,7 +763,24 @@ class LoudnessControllerActivity : AppCompatActivity() {
         
         // Filter info
         val clampedActual = actualPhon.coerceIn(40f, 90f)
-        calculationText.append("Filter: %.1f-%.1f_filter.wav".format(clampedActual, referencePhon))
+        
+        // Match the exact filter selection logic from LoudnessController
+        val roundedReferencePhon = when {
+            referencePhon < 77.5f -> 75f
+            referencePhon < 82.5f -> 80f
+            referencePhon < 87.5f -> 85f
+            else -> 90f
+        }
+        
+        // If actual phon >= 90, always use 90.0-90.0_filter.wav
+        val filterName = if (clampedActual >= 90f) {
+            "90.0-90.0_filter.wav"
+        } else {
+            // Always format with 1 decimal place
+            String.format("%.1f-%.1f_filter.wav", clampedActual, roundedReferencePhon)
+        }
+        
+        calculationText.append("Filter: $filterName")
         
         calculationDetailsText.text = calculationText.toString()
     }
@@ -646,10 +799,17 @@ class LoudnessControllerActivity : AppCompatActivity() {
         realDbSplText.text = String.format("%.1f dB", realDbSpl)
         realDbSplText.setTextColor(android.graphics.Color.parseColor(color))
         
-        // Calculate and update safe time
-        val safeTime = calculateSafeListeningTime(realDbSpl)
-        safeTimeText.text = "Safe: $safeTime"
-        safeTimeText.setTextColor(android.graphics.Color.parseColor(color))
+        // Only show safe time when FIR Compensation is enabled
+        if (loudnessController.isFirCompensationEnabled()) {
+            // Calculate and update safe time
+            val safeTime = calculateSafeListeningTime(realDbSpl)
+            safeTimeText.text = "Safe: $safeTime"
+            safeTimeText.setTextColor(android.graphics.Color.parseColor(color))
+            safeTimeText.visibility = View.VISIBLE
+        } else {
+            // Hide safe time when FIR Compensation is disabled
+            safeTimeText.visibility = View.GONE
+        }
     }
     
     private fun calculateSafeListeningTime(realDbSpl: Float): String {
@@ -691,6 +851,9 @@ class LoudnessControllerActivity : AppCompatActivity() {
                 
                 Timber.d("LoudnessController: Calibration settings applied - Target: $targetPhon, Reference: $referencePhon")
                 
+                // Trigger notification update
+                triggerLoudnessNotificationUpdate()
+                
                 // Enable master switch if needed
                 val wasPoweredOn = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
                 if (!wasPoweredOn) {
@@ -713,27 +876,32 @@ class LoudnessControllerActivity : AppCompatActivity() {
         }
     }
     
+    private fun sendPreferenceRefreshBroadcast() {
+        // Send a broadcast to force the UI to refresh the convolver preference
+        sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+            putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER))
+        })
+    }
+    
     private fun applyLoudnessSettings() {
         CoroutineScope(Dispatchers.IO).launch {
-            // Save current volume level before muting
-            val currentSystemVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-            val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-            
             try {
-                // Mute system volume briefly to prevent loud transients during DSP settings change
-                Timber.d("LoudnessController: Muting system volume during DSP update")
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
-                
                 // Update LoudnessController with current values
                 with(loudnessController) {
                     setReferencePhon(referencePhon)
                     setTargetPhon(targetPhon)
                     setLoudnessEnabled(true)
+                    // Force update to ensure filter is changed
+                    // updateLoudness() will handle the mute/unmute automatically
+                    updateLoudness()
                 }
                 
                 // The LoudnessController handles all the EEL generation and DSP updates
                 // We don't need to generate files here anymore
                 Timber.d("LoudnessController: Settings applied - targetPhon=$targetPhon, referencePhon=$referencePhon, actualPhon=${loudnessController.getActualPhon()}")
+                
+                // Trigger notification update
+                triggerLoudnessNotificationUpdate()
                 
                 
                 // Config file generation is kept for debugging/logging purposes
@@ -755,18 +923,15 @@ class LoudnessControllerActivity : AppCompatActivity() {
                     Timber.d("LoudnessController: DSP was off, turning on first")
                     prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), true).apply()
                     sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
-                    Thread.sleep(1000) // Give time for DSP to start
+                    delay(1000) // Give time for DSP to start
                 }
                 
                 // The LoudnessController now handles all DSP configuration
                 // It will update both Convolver and Liveprog settings
                 
-                // Wait 0.5 seconds then restore volume
-                Thread.sleep(500)
-                
-                // Restore original volume
-                Timber.d("LoudnessController: Restoring volume to: $currentSystemVolume")
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentSystemVolume, 0)
+                // Note: Volume restoration is handled by muteBeforeDspUpdate in LoudnessController.updateLoudness()
+                // No need to restore volume here as it would interfere with the mute logic
+                Timber.d("LoudnessController: Volume restoration will be handled by updateLoudness()")
                 
                 // Verify settings were applied (optional - for debugging)
                 val convolverPrefs = getSharedPreferences(Constants.PREF_CONVOLVER, Context.MODE_PRIVATE)
@@ -816,14 +981,6 @@ class LoudnessControllerActivity : AppCompatActivity() {
                 
             } catch (e: Exception) {
                 Timber.e(e, "Error applying loudness settings")
-                
-                // Restore original volume in case of error
-                try {
-                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentSystemVolume, 0)
-                    Timber.d("LoudnessController: Restored volume to original level after error")
-                } catch (volumeError: Exception) {
-                    Timber.e(volumeError, "Error restoring volume after failure")
-                }
                 
                 withContext(Dispatchers.Main) {
                     // Silent error handling - only log, no toast
@@ -1128,6 +1285,16 @@ class LoudnessControllerActivity : AppCompatActivity() {
         calibrationStatusText.isSaveEnabled = false
     }
     
+    override fun onResume() {
+        super.onResume()
+        // Update volume status when activity resumes
+        updateVolumeStatus()
+        
+        // Monitor volume changes while app is visible
+        startVolumeMonitoring()
+    }
+    
+    
     override fun onDestroy() {
         super.onDestroy()
         // Cancel any pending auto-apply job
@@ -1135,6 +1302,11 @@ class LoudnessControllerActivity : AppCompatActivity() {
         // Stop pink noise if playing
         if (isPlayingNoise) {
             stopPinkNoise()
+        }
+        // Restore original volumes if they were reduced
+        val safeVolumeManager = loudnessController.getSafeVolumeManager()
+        if (safeVolumeManager.areVolumesReduced()) {
+            safeVolumeManager.restoreOriginalVolumes()
         }
     }
     
@@ -1332,6 +1504,86 @@ class LoudnessControllerActivity : AppCompatActivity() {
             // Convert to -1.0 to 1.0 range
             return (runningSum.toFloat() / range) * 2.0f - 1.0f
         }
+    }
+    
+    override fun onPause() {
+        super.onPause()
+        // Stop monitoring volume changes
+        stopVolumeMonitoring()
+        
+        // Save current settings when activity is paused
+        saveCurrentSettings()
+        
+        // Mute briefly when exiting to prevent audio glitches
+        muteBeforeExit()
+    }
+    
+    private fun saveCurrentSettings() {
+        try {
+            // Save all current values to preferences through LoudnessController
+            loudnessController.setTargetPhon(targetPhon)
+            loudnessController.setReferencePhon(referencePhon)
+            loudnessController.setCalibrationOffset(calibrationOffset)
+            loudnessController.setMaxSpl(maxDynamicSpl)
+            // RMS offset and other settings are already saved when changed
+            
+            Timber.d("Saved settings - Target: $targetPhon, Reference: $referencePhon, Calibration: $calibrationOffset, MaxSPL: $maxDynamicSpl")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to save current settings")
+        }
+    }
+    
+    private fun muteBeforeExit() {
+        // Mute audio briefly when exiting activity
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                // Save current volume
+                val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                
+                // Mute system volume
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+                
+                // Wait 200ms (reduced from 300ms)
+                delay(200)
+                
+                // Restore original volume
+                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentVolume, 0)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to mute before exit")
+            }
+        }
+    }
+    
+    private fun startVolumeMonitoring() {
+        volumeMonitorJob?.cancel()
+        volumeMonitorJob = CoroutineScope(Dispatchers.Main).launch {
+            while (true) {
+                try {
+                    // Check if volumes need adjustment
+                    val safeVolumeManager = loudnessController.getSafeVolumeManager()
+                    if (safeVolumeManager.isSafeVolumeEnabled() && 
+                        safeVolumeManager.areVolumesReduced() && 
+                        loudnessController.isLoudnessEnabled()) {
+                        // Update volume reduction to maintain 15% ratio
+                        safeVolumeManager.updateVolumeReduction()
+                    }
+                    
+                    // Update UI
+                    updateVolumeStatus()
+                    
+                    // Check every 2 seconds
+                    delay(2000)
+                } catch (e: Exception) {
+                    Timber.e(e, "Error in volume monitoring")
+                    break
+                }
+            }
+        }
+    }
+    
+    private fun stopVolumeMonitoring() {
+        volumeMonitorJob?.cancel()
+        volumeMonitorJob = null
     }
     
 }

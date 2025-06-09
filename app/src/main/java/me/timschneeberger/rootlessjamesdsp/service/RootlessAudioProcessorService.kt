@@ -56,8 +56,10 @@ import me.timschneeberger.rootlessjamesdsp.utils.extensions.ContextExtensions.se
 import me.timschneeberger.rootlessjamesdsp.utils.extensions.ContextExtensions.toast
 import me.timschneeberger.rootlessjamesdsp.utils.extensions.ContextExtensions.unregisterLocalReceiver
 import me.timschneeberger.rootlessjamesdsp.utils.extensions.PermissionExtensions.hasRecordPermission
+import me.timschneeberger.rootlessjamesdsp.utils.LoudnessController
 import me.timschneeberger.rootlessjamesdsp.utils.notifications.Notifications
 import me.timschneeberger.rootlessjamesdsp.utils.notifications.ServiceNotificationHelper
+import me.timschneeberger.rootlessjamesdsp.utils.notifications.LoudnessNotificationHelper
 import me.timschneeberger.rootlessjamesdsp.utils.preferences.Preferences
 import me.timschneeberger.rootlessjamesdsp.utils.sdkAbove
 import org.koin.android.ext.android.inject
@@ -142,6 +144,7 @@ class RootlessAudioProcessorService : BaseAudioProcessorService() {
         filter.addAction(ACTION_SERVICE_RELOAD_LIVEPROG)
         filter.addAction(ACTION_SERVICE_HARD_REBOOT_CORE)
         filter.addAction(ACTION_SERVICE_SOFT_REBOOT_CORE)
+        filter.addAction("me.timschneeberger.rootlessjamesdsp.UPDATE_LOUDNESS_NOTIFICATION")
         registerLocalReceiver(broadcastReceiver, filter)
 
         // Setup shared preferences
@@ -310,6 +313,20 @@ class RootlessAudioProcessorService : BaseAudioProcessorService() {
                 ACTION_SERVICE_RELOAD_LIVEPROG -> engine.syncWithPreferences(arrayOf(Constants.PREF_LIVEPROG))
                 ACTION_SERVICE_HARD_REBOOT_CORE -> restartRecording()
                 ACTION_SERVICE_SOFT_REBOOT_CORE -> requestAudioRecordRecreation()
+                "me.timschneeberger.rootlessjamesdsp.UPDATE_LOUDNESS_NOTIFICATION" -> {
+                    Timber.d("Manual loudness notification update requested")
+                    val loudnessController = LoudnessController(this@RootlessAudioProcessorService)
+                    if (loudnessController.isLoudnessEnabled()) {
+                        try {
+                            Timber.d("Creating loudness notification manually")
+                            val loudnessNotification = LoudnessNotificationHelper.createLoudnessNotification(this@RootlessAudioProcessorService)
+                            notificationManager.notify(Notifications.ID_LOUDNESS_CONTROL, loudnessNotification)
+                            Timber.d("Loudness notification posted manually")
+                        } catch (e: Exception) {
+                            Timber.e(e, "Failed to create loudness notification manually")
+                        }
+                    }
+                }
             }
         }
     }
@@ -353,6 +370,34 @@ class RootlessAudioProcessorService : BaseAudioProcessorService() {
                 this@RootlessAudioProcessorService,
                 sessionList.map { it.value }.toTypedArray()
             )
+            
+            // Show Loudness Controller notification if enabled
+            val loudnessController = LoudnessController(this@RootlessAudioProcessorService)
+            val isLoudnessEnabled = loudnessController.isLoudnessEnabled()
+            Timber.d("Loudness notification check: isLoudnessEnabled=$isLoudnessEnabled")
+            
+            if (isLoudnessEnabled) {
+                try {
+                    // Ensure notification channels are created
+                    Notifications.createChannels(this@RootlessAudioProcessorService)
+                    
+                    Timber.d("Creating loudness notification...")
+                    val loudnessNotification = LoudnessNotificationHelper.createLoudnessNotification(this@RootlessAudioProcessorService)
+                    Timber.d("Loudness notification created, notifying with ID=${Notifications.ID_LOUDNESS_CONTROL}")
+                    notificationManager.notify(Notifications.ID_LOUDNESS_CONTROL, loudnessNotification)
+                    Timber.d("Loudness notification posted successfully")
+                    
+                    // Log notification details for debugging
+                    Timber.d("Notification channel: ${Notifications.CHANNEL_LOUDNESS_CONTROL}")
+                    Timber.d("Notification small icon: ${R.drawable.ic_tune_vertical_variant_24dp}")
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to create/post loudness notification")
+                }
+            } else {
+                // Remove loudness notification if disabled
+                Timber.d("Cancelling loudness notification (loudness disabled)")
+                notificationManager.cancel(Notifications.ID_LOUDNESS_CONTROL)
+            }
         }
     }
 

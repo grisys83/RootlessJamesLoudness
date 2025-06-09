@@ -293,6 +293,19 @@
                 <action android:name="me.timschneeberger.rootlessjamesdsp.SET_POWER_STATE" />
             </intent-filter>
         </receiver>
+        
+        <receiver
+            android:name=".utils.notifications.LoudnessNotificationHelper$LoudnessNotificationReceiver"
+            android:enabled="true"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="me.timschneeberger.rootlessjamesdsp.INCREASE_1" />
+                <action android:name="me.timschneeberger.rootlessjamesdsp.DECREASE_1" />
+                <action android:name="me.timschneeberger.rootlessjamesdsp.INCREASE_5" />
+                <action android:name="me.timschneeberger.rootlessjamesdsp.DECREASE_5" />
+                <action android:name="me.timschneeberger.rootlessjamesdsp.TOGGLE_LOUDNESS" />
+            </intent-filter>
+        </receiver>
 
         <!-- Providers -->
         <provider

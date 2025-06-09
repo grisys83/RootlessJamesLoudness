@@ -16,6 +16,10 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.abs
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * LoudnessController implements APO Loudness-like functionality for Android
@@ -32,6 +36,7 @@ class LoudnessController(private val context: Context) : KoinComponent {
     
     private val audioManager = context.getSystemService<AudioManager>()!!
     private val preferences: Preferences.App by inject()
+    private val safeVolumeManager = SafeVolumeManager(context)
     
     // Constants for loudness calculations
     companion object {
@@ -189,6 +194,14 @@ class LoudnessController(private val context: Context) : KoinComponent {
     fun setLoudnessEnabled(enabled: Boolean) {
         loudnessEnabled = enabled
         saveSettings()
+        
+        // Handle safe volume management
+        if (enabled) {
+            safeVolumeManager.applyVolumeReduction()
+        } else {
+            safeVolumeManager.restoreOriginalVolumes()
+        }
+        
         updateLoudness()
     }
     
@@ -266,6 +279,13 @@ class LoudnessController(private val context: Context) : KoinComponent {
      */
     fun getRmsOffset(): Float {
         return rmsOffset
+    }
+    
+    /**
+     * Get SafeVolumeManager instance
+     */
+    fun getSafeVolumeManager(): SafeVolumeManager {
+        return safeVolumeManager
     }
     
     /**
@@ -449,6 +469,71 @@ spl1 *= gainLin;
      * Update loudness configuration
      */
     private fun updateLoudnessConfig(config: String) {
+        // Mute audio before updating DSP to prevent glitches
+        muteBeforeDspUpdate {
+            updateLoudnessConfigInternal(config)
+        }
+    }
+    
+    private var isMuting = false
+    private var savedVolume: Int? = null
+    
+    /**
+     * Mute audio temporarily before DSP updates
+     */
+    private fun muteBeforeDspUpdate(action: () -> Unit) {
+        CoroutineScope(Dispatchers.Main).launch {
+            val audioManager = context.getSystemService<AudioManager>()!!
+            
+            // Prevent nested muting
+            if (isMuting) {
+                Timber.d("Already muting, skipping nested call")
+                action()
+                return@launch
+            }
+            
+            isMuting = true
+            
+            // Save current volume only if not already saved
+            val currentVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            if (savedVolume == null && currentVolume > 0) {
+                savedVolume = currentVolume
+                Timber.d("Muting audio - saving volume: $savedVolume")
+            } else {
+                Timber.d("Muting audio - current volume: $currentVolume, saved volume: $savedVolume")
+            }
+            
+            // Mute system volume
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+            
+            // Wait 200ms for mute to take effect (reduced from 300ms)
+            delay(200)
+            
+            // Perform the DSP update
+            action()
+            
+            // Wait a bit for DSP update to complete
+            delay(50)
+            
+            // Restore original volume
+            val volumeToRestore = savedVolume ?: currentVolume
+            Timber.d("Restoring audio - volume: $volumeToRestore")
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, volumeToRestore, 0)
+            
+            // Verify restoration
+            val restoredVolume = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            Timber.d("Volume restoration complete - expected: $volumeToRestore, actual: $restoredVolume")
+            
+            // Clear saved volume and flag
+            savedVolume = null
+            isMuting = false
+        }
+    }
+    
+    /**
+     * Internal implementation of loudness config update
+     */
+    private fun updateLoudnessConfigInternal(config: String) {
         // Calculate actual phon for filter selection
         val actualPhon = getActualPhon()
         
@@ -496,6 +581,10 @@ spl1 *= gainLin;
         context.sendLocalBroadcast(android.content.Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
             putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER, Constants.PREF_LIVEPROG))
         })
+        
+        // Send a custom broadcast to notify UI components to refresh
+        // (CONFIGURATION_CHANGED is system-only and causes SecurityException)
+        context.sendLocalBroadcast(android.content.Intent("me.timschneeberger.rootlessjamesdsp.LOUDNESS_CONFIG_UPDATED"))
     }
     
     /**

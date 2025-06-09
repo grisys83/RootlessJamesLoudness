@@ -28,6 +28,8 @@ object Notifications {
     const val ID_SERVICE_APPCOMPAT = 3
     const val CHANNEL_SERVICE_STARTUP = "service_startup"
     const val ID_SERVICE_STARTUP = 4
+    const val CHANNEL_LOUDNESS_CONTROL = "loudness_control"
+    const val ID_LOUDNESS_CONTROL = 5
 
     /**
      * Notification channel and ids used by the backup/restore system.
@@ -73,8 +75,16 @@ object Notifications {
 
         notificationService.createNotificationChannelsCompat(
             listOf(
-                buildNotificationChannel(CHANNEL_SERVICE_STATUS, IMPORTANCE_NONE) {
+                buildNotificationChannel(CHANNEL_SERVICE_STATUS, IMPORTANCE_LOW) {
                     setName(context.getString(R.string.notification_channel_service))
+                    setGroup(GROUP_SERVICE)
+                    setShowBadge(false)
+                    setVibrationEnabled(false)
+                    setSound(null, null)
+                },
+                buildNotificationChannel(CHANNEL_LOUDNESS_CONTROL, IMPORTANCE_DEFAULT) {
+                    setName("Loudness Controller")
+                    setDescription("Notifications for loudness control adjustments")
                     setGroup(GROUP_SERVICE)
                     setShowBadge(false)
                     setVibrationEnabled(false)
