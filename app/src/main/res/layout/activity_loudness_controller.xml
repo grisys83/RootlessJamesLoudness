@@ -89,7 +89,7 @@
             <com.google.android.material.textview.MaterialTextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Real Volume"
+                android:text="Target Phon"
                 android:textAppearance="?attr/textAppearanceBodyLarge"
                 android:textColor="?attr/colorOnSurface"
                 android:layout_marginBottom="8dp" />
@@ -129,7 +129,7 @@
             <com.google.android.material.textview.MaterialTextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Reference"
+                android:text="Reference Phon"
                 android:textAppearance="?attr/textAppearanceBodyLarge"
                 android:textColor="?attr/colorOnSurface"
                 android:layout_marginBottom="8dp" />
@@ -165,6 +165,67 @@
 
             </LinearLayout>
 
+            <!-- RMS Offset Slider -->
+            <com.google.android.material.textview.MaterialTextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Music RMS Offset"
+                android:textAppearance="?attr/textAppearanceBodyLarge"
+                android:textColor="?attr/colorOnSurface"
+                android:layout_marginBottom="8dp" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:gravity="center_vertical"
+                android:layout_marginBottom="16dp">
+
+                <com.google.android.material.slider.Slider
+                    android:id="@+id/rms_offset_slider"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:valueFrom="0"
+                    android:valueTo="14"
+                    android:stepSize="1"
+                    android:value="10" />
+
+                <com.google.android.material.textview.MaterialTextView
+                    android:id="@+id/rms_offset_value_text"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="-10 dB"
+                    android:textAppearance="?attr/textAppearanceBodyMedium"
+                    android:textColor="?attr/colorOnSurface"
+                    android:layout_marginStart="8dp"
+                    android:minWidth="60dp"
+                    android:gravity="end" />
+
+            </LinearLayout>
+
+            <!-- Auto Reference Mode Switch -->
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/auto_reference_switch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="Auto Reference Mode"
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                android:layout_marginBottom="8dp"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp" />
+                
+            <!-- FIR Compensation Switch -->
+            <com.google.android.material.switchmaterial.SwitchMaterial
+                android:id="@+id/fir_compensation_switch"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="FIR Compensation"
+                android:textAppearance="?attr/textAppearanceBodyMedium"
+                android:layout_marginBottom="16dp"
+                android:paddingStart="4dp"
+                android:paddingEnd="4dp"
+                android:checked="true" />
 
             <!-- System Calibration Card -->
             <com.google.android.material.card.MaterialCardView

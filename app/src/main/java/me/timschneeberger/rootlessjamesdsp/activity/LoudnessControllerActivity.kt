@@ -63,14 +63,6 @@ class LoudnessControllerActivity : AppCompatActivity() {
         
         // Default reference level  
         const val DEFAULT_REFERENCE_PHON = 80.0f
-        
-        // FIR compensation lookup table (to compensate for filter's nonlinear gain)
-        private val firCompensationTable = mapOf(
-            75f to mapOf(40f to -25.06f, 50f to -20.60f, 60f to -16.29f, 70f to -11.67f, 80f to -6.24f, 90f to -0.80f),
-            80f to mapOf(40f to -27.72f, 50f to -23.26f, 60f to -18.95f, 70f to -14.33f, 80f to -8.90f, 90f to -3.47f),
-            85f to mapOf(40f to -30.18f, 50f to -25.72f, 60f to -21.40f, 70f to -16.79f, 80f to -11.36f, 90f to -5.92f),
-            90f to mapOf(40f to -32.48f, 50f to -28.02f, 60f to -23.71f, 70f to -19.09f, 80f to -13.66f, 90f to -8.23f)
-        )
     }
     
     // UI Components
@@ -88,6 +80,9 @@ class LoudnessControllerActivity : AppCompatActivity() {
     private lateinit var calibrationStatusText: MaterialTextView
     private lateinit var calculationDetailsText: MaterialTextView
     private lateinit var autoReferenceSwitch: com.google.android.material.switchmaterial.SwitchMaterial
+    private lateinit var firCompensationSwitch: com.google.android.material.switchmaterial.SwitchMaterial
+    private lateinit var rmsOffsetSlider: Slider
+    private lateinit var rmsOffsetValueText: MaterialTextView
     
     // New calibration buttons
     private lateinit var prepareMaxSplButton: MaterialButton
@@ -117,8 +112,8 @@ class LoudnessControllerActivity : AppCompatActivity() {
     private var isCalibrating = false
     
     // Current values
-    private var targetSpl = DEFAULT_VOLUME_DB  // This is what the user sets with the slider (real vol)
-    private var referenceLevel = DEFAULT_REFERENCE_PHON
+    private var targetPhon = DEFAULT_VOLUME_DB  // This is what the user sets with the slider (real vol)
+    private var referencePhon = DEFAULT_REFERENCE_PHON
     private var calibrationOffset = 0.0f  // Calibration offset from measurement
     private var maxDynamicSpl = MAX_VOLUME_DB  // User-configurable max SPL
     
@@ -193,6 +188,12 @@ class LoudnessControllerActivity : AppCompatActivity() {
                     setupCalibration()
                     loadCurrentSettings()
                     updateDisplay()
+                    
+                    // Force update loudness configuration to ensure correct filter is selected
+                    if (loudnessController.isLoudnessEnabled()) {
+                        Timber.d("Forcing loudness update on activity start")
+                        loudnessController.updateLoudness()
+                    }
                 }, 100)
             } catch (e: Exception) {
                 Timber.e(e, "Failed to initialize loudness controller components")
@@ -219,6 +220,15 @@ class LoudnessControllerActivity : AppCompatActivity() {
         calibrationStatusText = findViewById(R.id.calibration_status_text)
         calculationDetailsText = findViewById(R.id.calculation_details_text)
         
+        // Disable state saving for TextViews that might contain large amounts of text
+        // This prevents TransactionTooLargeException
+        calculationDetailsText.isSaveEnabled = false
+        technicalParamsText.isSaveEnabled = false
+        calibrationStatusText.isSaveEnabled = false
+        measuredSplInput.isSaveEnabled = false
+        realDbSplText.isSaveEnabled = false
+        safeTimeText.isSaveEnabled = false
+        
         // Initialize new calibration buttons
         prepareMaxSplButton = findViewById(R.id.prepare_max_spl_button)
         saveMaxSplButton = findViewById(R.id.save_max_spl_button)
@@ -241,6 +251,9 @@ class LoudnessControllerActivity : AppCompatActivity() {
         saveMeasurementButton = findViewById(R.id.save_measurement_button)
         cancelCalibrationButton = findViewById(R.id.cancel_calibration_button)
         autoReferenceSwitch = findViewById(R.id.auto_reference_switch)
+        firCompensationSwitch = findViewById(R.id.fir_compensation_switch)
+        rmsOffsetSlider = findViewById(R.id.rms_offset_slider)
+        rmsOffsetValueText = findViewById(R.id.rms_offset_value_text)
     }
     
     private fun setupToolbar() {
@@ -262,17 +275,17 @@ class LoudnessControllerActivity : AppCompatActivity() {
             
             addOnChangeListener { _, value, fromUser ->
                 if (fromUser) {
-                    targetSpl = value  // Real vol = target SPL
+                    targetPhon = value  // Real vol = target phon
                     realVolumeValueText.text = String.format("%.1f", value)
                     
                     // Update reference if auto mode is enabled
                     if (loudnessController.isAutoReferenceEnabled()) {
-                        // Update target SPL in controller first, which will auto-calculate new reference
-                        loudnessController.setTargetSpl(value)
-                        // Get the newly calculated reference level
-                        referenceLevel = loudnessController.getReferenceLevel()
-                        referenceSlider.value = referenceLevel.coerceIn(75.0f, 90.0f)
-                        referenceValueText.text = referenceLevel.toInt().toString()
+                        // Update target phon in controller first, which will auto-calculate new reference
+                        loudnessController.setTargetPhon(value)
+                        // Get the newly calculated reference phon
+                        referencePhon = loudnessController.getReferencePhon()
+                        referenceSlider.value = referencePhon.coerceIn(75.0f, 90.0f)
+                        referenceValueText.text = referencePhon.toInt().toString()
                     }
                     
                     updateDisplay()
@@ -302,8 +315,8 @@ class LoudnessControllerActivity : AppCompatActivity() {
             
             addOnChangeListener { _, value, fromUser ->
                 if (fromUser) {
-                    referenceLevel = value
-                    referenceValueText.text = referenceLevel.toInt().toString()
+                    referencePhon = value
+                    referenceValueText.text = referencePhon.toInt().toString()
                     updateDisplay()
                     // Don't apply during dragging
                 }
@@ -334,12 +347,29 @@ class LoudnessControllerActivity : AppCompatActivity() {
             
             if (isChecked) {
                 // Update UI to show auto-calculated reference
-                referenceLevel = loudnessController.getReferenceLevel()
-                referenceSlider.value = referenceLevel
-                referenceValueText.text = referenceLevel.toInt().toString()
+                referencePhon = loudnessController.getReferencePhon()
+                referenceSlider.value = referencePhon
+                referenceValueText.text = referencePhon.toInt().toString()
             }
             
             updateDisplay()
+        }
+        
+        // Setup FIR compensation switch
+        firCompensationSwitch.setOnCheckedChangeListener { _, isChecked ->
+            loudnessController.setFirCompensationEnabled(isChecked)
+            updateDisplay()
+        }
+        
+        // Setup RMS offset slider
+        rmsOffsetSlider.apply {
+            addOnChangeListener { _, value, fromUser ->
+                if (fromUser) {
+                    loudnessController.setRmsOffset(value)
+                    rmsOffsetValueText.text = String.format("-%d dB", value.toInt())
+                    updateDisplay()
+                }
+            }
         }
         
         // New unified calibration flow
@@ -404,8 +434,8 @@ class LoudnessControllerActivity : AppCompatActivity() {
             return
         }
         
-        // Perform calibration using current target SPL as expected value
-        val expectedSpl = targetSpl
+        // Perform calibration using current target phon as expected value
+        val expectedSpl = targetPhon
         loudnessController.performCalibration(measuredSpl, expectedSpl)
         
         // Update calibration offset for display
@@ -458,15 +488,15 @@ class LoudnessControllerActivity : AppCompatActivity() {
     private fun loadCurrentSettings() {
         try {
             // Load saved settings with safe access
-            targetSpl = try {
-                loudnessController.getTargetSpl()
+            targetPhon = try {
+                loudnessController.getTargetPhon()
             } catch (e: Exception) {
                 Timber.e(e, "Failed to get target SPL from controller")
                 DEFAULT_VOLUME_DB
             }
             
-            referenceLevel = try {
-                loudnessController.getReferenceLevel()
+            referencePhon = try {
+                loudnessController.getReferencePhon()
             } catch (e: Exception) {
                 Timber.e(e, "Failed to get reference level from controller")
                 DEFAULT_REFERENCE_PHON
@@ -493,14 +523,22 @@ class LoudnessControllerActivity : AppCompatActivity() {
             autoReferenceSwitch.isChecked = loudnessController.isAutoReferenceEnabled()
             referenceSlider.isEnabled = !loudnessController.isAutoReferenceEnabled()
             
-            // Round values to match step size and ensure they're within bounds
-            realVolumeSlider.value = ((targetSpl * 10).roundToInt() / 10f).coerceIn(realVolumeSlider.valueFrom, realVolumeSlider.valueTo)
-            realVolumeValueText.text = String.format("%.1f", targetSpl)
+            // Load FIR compensation state
+            firCompensationSwitch.isChecked = loudnessController.isFirCompensationEnabled()
             
-            // Ensure reference level is within slider bounds (75-90)
-            val clampedReferenceLevel = referenceLevel.roundToInt().toFloat().coerceIn(75.0f, 90.0f)
-            referenceSlider.value = clampedReferenceLevel
-            referenceValueText.text = clampedReferenceLevel.toInt().toString()
+            // Load RMS offset
+            val rmsOffset = loudnessController.getRmsOffset()
+            rmsOffsetSlider.value = rmsOffset
+            rmsOffsetValueText.text = String.format("-%d dB", rmsOffset.toInt())
+            
+            // Round values to match step size and ensure they're within bounds
+            realVolumeSlider.value = ((targetPhon * 10).roundToInt() / 10f).coerceIn(realVolumeSlider.valueFrom, realVolumeSlider.valueTo)
+            realVolumeValueText.text = String.format("%.1f", targetPhon)
+            
+            // Ensure reference phon is within slider bounds (75-90)
+            val clampedReferencePhon = referencePhon.roundToInt().toFloat().coerceIn(75.0f, 90.0f)
+            referenceSlider.value = clampedReferencePhon
+            referenceValueText.text = clampedReferencePhon.toInt().toString()
         } catch (e: Exception) {
             Timber.e(e, "Failed to load current settings")
             // Use default values if loading fails
@@ -511,18 +549,18 @@ class LoudnessControllerActivity : AppCompatActivity() {
     }
     
     private fun updateDisplay() {
-        // Real volume is target SPL (what user sets with slider)
-        val realDbSpl = targetSpl
+        // Calculate actual phon (target phon - RMS offset)
+        val actualPhon = loudnessController.getActualPhon()
         
-        // Update main display with safety colors
-        updateMainDisplay(realDbSpl)
+        // Update main display with actual phon for safety colors
+        updateMainDisplay(actualPhon)
         
-        // Calculate FIR compensation from table
-        val firCompensation = getFirCompensation(targetSpl, referenceLevel)
+        // Calculate FIR compensation using actual phon
+        val firCompensation = loudnessController.getFirCompensation(actualPhon, referencePhon)
         
         // Update technical parameters text
         technicalParamsText.text = String.format("T%.0f R%.0f C:%.1f F:%.1f", 
-            targetSpl, referenceLevel, calibrationOffset, firCompensation)
+            targetPhon, referencePhon, calibrationOffset, firCompensation)
         
         // Update calculation details
         updateCalculationDetails(firCompensation)
@@ -530,17 +568,23 @@ class LoudnessControllerActivity : AppCompatActivity() {
     
     private fun updateReferenceSliderRange() {
         // No need to update range, just ensure values are valid
-        targetSpl = targetSpl.coerceIn(40.0f, 90.0f)
-        referenceLevel = referenceLevel.coerceIn(75.0f, 90.0f)
+        targetPhon = targetPhon.coerceIn(40.0f, 90.0f)
+        referencePhon = referencePhon.coerceIn(75.0f, 90.0f)
     }
     
     private fun updateCalculationDetails(firCompensation: Float) {
         // Build calculation text following the agreed format
         val calculationText = StringBuilder()
         
+        // Get actual phon
+        val actualPhon = loudnessController.getActualPhon()
+        val rmsOffset = loudnessController.getRmsOffset()
+        
         // Show current settings
-        calculationText.append("Target SPL: %.1f dB\n".format(targetSpl))
-        calculationText.append("Reference: %.0f phon\n".format(referenceLevel))
+        calculationText.append("Target Phon: %.1f\n".format(targetPhon))
+        calculationText.append("RMS Offset: -%.0f dB\n".format(rmsOffset))
+        calculationText.append("Actual Phon: %.1f (%.1f - %.0f)\n".format(actualPhon, targetPhon, rmsOffset))
+        calculationText.append("Reference Phon: %.0f\n".format(referencePhon))
         
         // Show calibration info if available
         if (calibrationOffset != 0.0f) {
@@ -565,10 +609,10 @@ class LoudnessControllerActivity : AppCompatActivity() {
             firCompensation, calibrationOffset, totalEelGain))
         
         // Real Volume calculation (for clarity)
-        val attenuation = maxDynamicSpl - targetSpl
-        calculationText.append("Real Vol = Target SPL = %.1f dB\n".format(targetSpl))
-        calculationText.append("Attenuation Required = Max SPL - Target SPL\n")
-        calculationText.append("Attenuation Required = %.1f - %.1f = %.1f dB\n\n".format(maxDynamicSpl, targetSpl, attenuation))
+        val attenuation = maxDynamicSpl - targetPhon
+        calculationText.append("Real Vol = Target Phon = %.1f\n".format(targetPhon))
+        calculationText.append("Attenuation Required = Max SPL - Target Phon\n")
+        calculationText.append("Attenuation Required = %.1f - %.1f = %.1f dB\n\n".format(maxDynamicSpl, targetPhon, attenuation))
         
         // Volume control mechanism
         calculationText.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
@@ -582,8 +626,8 @@ class LoudnessControllerActivity : AppCompatActivity() {
         calculationText.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
         
         // Filter info
-        val clampedTarget = targetSpl.coerceIn(40f, 90f)
-        calculationText.append("Filter: %.1f-%.1f_filter.wav".format(clampedTarget, referenceLevel))
+        val clampedActual = actualPhon.coerceIn(40f, 90f)
+        calculationText.append("Filter: %.1f-%.1f_filter.wav".format(clampedActual, referencePhon))
         
         calculationDetailsText.text = calculationText.toString()
     }
@@ -640,12 +684,12 @@ class LoudnessControllerActivity : AppCompatActivity() {
                 
                 // Update LoudnessController with current values
                 with(loudnessController) {
-                    setReferenceLevel(referenceLevel)
-                    setTargetSpl(targetSpl)
+                    setReferencePhon(referencePhon)
+                    setTargetPhon(targetPhon)
                     setLoudnessEnabled(true)
                 }
                 
-                Timber.d("LoudnessController: Calibration settings applied - Target: $targetSpl, Reference: $referenceLevel")
+                Timber.d("LoudnessController: Calibration settings applied - Target: $targetPhon, Reference: $referencePhon")
                 
                 // Enable master switch if needed
                 val wasPoweredOn = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
@@ -682,14 +726,14 @@ class LoudnessControllerActivity : AppCompatActivity() {
                 
                 // Update LoudnessController with current values
                 with(loudnessController) {
-                    setReferenceLevel(referenceLevel)
-                    setTargetSpl(targetSpl)
+                    setReferencePhon(referencePhon)
+                    setTargetPhon(targetPhon)
                     setLoudnessEnabled(true)
                 }
                 
                 // The LoudnessController handles all the EEL generation and DSP updates
                 // We don't need to generate files here anymore
-                Timber.d("LoudnessController: Settings applied")
+                Timber.d("LoudnessController: Settings applied - targetPhon=$targetPhon, referencePhon=$referencePhon, actualPhon=${loudnessController.getActualPhon()}")
                 
                 
                 // Config file generation is kept for debugging/logging purposes
@@ -791,92 +835,7 @@ class LoudnessControllerActivity : AppCompatActivity() {
     
     
     
-    // Helper functions for loudness calculations
-    private fun interpolate(x: Float, x1: Float, x2: Float, y1: Float, y2: Float): Float {
-        return y1 + (y2 - y1) * (x - x1) / (x2 - x1)
-    }
-    
-    
-    private fun getFirCompensation(listeningLevel: Float, referenceLevel: Float): Float {
-        // Since we don't have compensation data for all reference levels (76-89),
-        // we'll interpolate between the available reference levels
-        val refKeys = firCompensationTable.keys.sorted()
-        
-        // Find the two closest reference levels for interpolation
-        var lowerRef = 75f
-        var upperRef = 80f
-        
-        for (i in 0 until refKeys.size - 1) {
-            if (referenceLevel >= refKeys[i] && referenceLevel <= refKeys[i + 1]) {
-                lowerRef = refKeys[i]
-                upperRef = refKeys[i + 1]
-                break
-            }
-        }
-        
-        // If exact match exists, use it
-        if (referenceLevel in refKeys) {
-            val compensations = firCompensationTable[referenceLevel]!!
-            val listenKeys = compensations.keys.sorted()
-            
-            // Find appropriate compensation for listening level
-            if (listeningLevel in compensations) {
-                return compensations[listeningLevel]!!
-            }
-            
-            // Interpolate between listening levels
-            for (i in 0 until listenKeys.size - 1) {
-                if (listeningLevel >= listenKeys[i] && listeningLevel <= listenKeys[i+1]) {
-                    return interpolate(listeningLevel, listenKeys[i], listenKeys[i+1],
-                                     compensations[listenKeys[i]]!!, compensations[listenKeys[i+1]]!!)
-                }
-            }
-            
-            // Extrapolate if outside range
-            return if (listeningLevel < listenKeys.first()) {
-                interpolate(listeningLevel, listenKeys[0], listenKeys[1],
-                           compensations[listenKeys[0]]!!, compensations[listenKeys[1]]!!)
-            } else {
-                val size = listenKeys.size
-                interpolate(listeningLevel, listenKeys[size-2], listenKeys[size-1],
-                           compensations[listenKeys[size-2]]!!, compensations[listenKeys[size-1]]!!)
-            }
-        }
-        
-        // Interpolate between reference levels
-        val lowerCompensation = getCompensationForExactReference(listeningLevel, lowerRef)
-        val upperCompensation = getCompensationForExactReference(listeningLevel, upperRef)
-        
-        return interpolate(referenceLevel, lowerRef, upperRef, lowerCompensation, upperCompensation)
-    }
-    
-    private fun getCompensationForExactReference(listeningLevel: Float, referenceLevel: Float): Float {
-        val compensations = firCompensationTable[referenceLevel] ?: return -20.0f // fallback
-        val listenKeys = compensations.keys.sorted()
-        
-        // Find appropriate compensation for listening level
-        if (listeningLevel in compensations) {
-            return compensations[listeningLevel]!!
-        }
-        
-        // Interpolate between listening levels
-        for (i in 0 until listenKeys.size - 1) {
-            if (listeningLevel >= listenKeys[i] && listeningLevel <= listenKeys[i+1]) {
-                return interpolate(listeningLevel, listenKeys[i], listenKeys[i+1],
-                                 compensations[listenKeys[i]]!!, compensations[listenKeys[i+1]]!!)
-            }
-        }
-        
-        // Extrapolate if outside range
-        return if (listeningLevel < listenKeys.first()) {
-            interpolate(listeningLevel, listenKeys[0], listenKeys[1],
-                       compensations[listenKeys[0]]!!, compensations[listenKeys[1]]!!)
-        } else {
-            val size = listenKeys.size
-            interpolate(listeningLevel, listenKeys[size-2], listenKeys[size-1],
-                       compensations[listenKeys[size-2]]!!, compensations[listenKeys[size-1]]!!)
-        }
-    }
+    // Note: FIR compensation calculation is now handled by LoudnessController.getFirCompensation()
     
     private fun startCalibrationFlow() {
         isCalibrating = true
@@ -921,11 +880,11 @@ class LoudnessControllerActivity : AppCompatActivity() {
         // Target 90, Reference 90 with only FIR compensation
         realVolumeSlider.value = 90.0f
         realVolumeValueText.text = "90.0"
-        targetSpl = 90.0f  // Explicitly set targetSpl
+        targetPhon = 90.0f  // Explicitly set targetPhon
         
         referenceSlider.value = 90.0f
         referenceValueText.text = "90"
-        referenceLevel = 90.0f  // Explicitly set referenceLevel
+        referencePhon = 90.0f  // Explicitly set referencePhon
         
         // Apply these settings without muting during calibration
         applyLoudnessSettingsForCalibration()
@@ -962,15 +921,15 @@ class LoudnessControllerActivity : AppCompatActivity() {
         // IMPORTANT: For 75 dB calibration, we need to set the real volume to exactly 75 dB
         val targetRealVolume = 75.0f
         
-        // Update both the slider AND the targetSpl variable
+        // Update both the slider AND the targetPhon variable
         realVolumeSlider.value = targetRealVolume
         realVolumeValueText.text = String.format("%.1f", targetRealVolume)
-        targetSpl = targetRealVolume  // Explicitly set targetSpl
+        targetPhon = targetRealVolume  // Explicitly set targetPhon
         
         // Set reference to 75 for 75/75 filter
         referenceSlider.value = 75.0f
         referenceValueText.text = "75"
-        referenceLevel = 75.0f  // Explicitly set referenceLevel
+        referencePhon = 75.0f  // Explicitly set referencePhon
         
         // Apply these settings without muting during calibration
         applyLoudnessSettingsForCalibration()
@@ -992,7 +951,7 @@ class LoudnessControllerActivity : AppCompatActivity() {
         measuredSplInput.setText("")
         
         // Log current state for debugging
-        Timber.d("Step 2 preparation: targetSpl=$targetSpl, maxSpl=${loudnessController.getMaxSpl()}, expected attenuation=${loudnessController.getMaxSpl() - targetSpl}")
+        Timber.d("Step 2 preparation: targetPhon=$targetPhon, maxSpl=${loudnessController.getMaxSpl()}, expected attenuation=${loudnessController.getMaxSpl() - targetPhon}")
         
         // Use the calibration function that properly forces reload
         CoroutineScope(Dispatchers.IO).launch {
@@ -1026,7 +985,7 @@ class LoudnessControllerActivity : AppCompatActivity() {
             }
         }
         
-        toast("Now playing at ${targetSpl.toInt()}/${referenceLevel.toInt()} settings. Measure SPL.")
+        toast("Now playing at ${targetPhon.toInt()}/${referencePhon.toInt()} settings. Measure SPL.")
     }
     
     private fun saveCurrentMeasurement() {
@@ -1161,6 +1120,14 @@ class LoudnessControllerActivity : AppCompatActivity() {
             .show()
     }
     
+    override fun onSaveInstanceState(outState: Bundle) {
+        super.onSaveInstanceState(outState)
+        // Prevent saving large text in TextViews to avoid TransactionTooLargeException
+        calculationDetailsText.isSaveEnabled = false
+        technicalParamsText.isSaveEnabled = false
+        calibrationStatusText.isSaveEnabled = false
+    }
+    
     override fun onDestroy() {
         super.onDestroy()
         // Cancel any pending auto-apply job
@@ -1179,8 +1146,8 @@ class LoudnessControllerActivity : AppCompatActivity() {
     private fun saveProfile(slot: Int) {
         val profileKey = "loudness_profile_$slot"
         val profileData = mapOf(
-            "targetSpl" to targetSpl,
-            "referenceLevel" to referenceLevel,
+            "targetPhon" to targetPhon,
+            "referencePhon" to referencePhon,
             "calibrationOffset" to calibrationOffset,
             "maxSpl" to loudnessController.getMaxSpl()
         )
@@ -1209,17 +1176,17 @@ class LoudnessControllerActivity : AppCompatActivity() {
             }
             
             // Load values
-            targetSpl = profileData["targetSpl"] ?: DEFAULT_VOLUME_DB
-            referenceLevel = profileData["referenceLevel"] ?: DEFAULT_REFERENCE_PHON
+            targetPhon = profileData["targetPhon"] ?: DEFAULT_VOLUME_DB
+            referencePhon = profileData["referencePhon"] ?: DEFAULT_REFERENCE_PHON
             calibrationOffset = profileData["calibrationOffset"] ?: 0.0f
             
             // Update UI - round values to match step size
-            realVolumeSlider.value = (targetSpl * 10).roundToInt() / 10f
-            referenceSlider.value = referenceLevel.roundToInt().toFloat().coerceIn(75.0f, 90.0f)
+            realVolumeSlider.value = (targetPhon * 10).roundToInt() / 10f
+            referenceSlider.value = referencePhon.roundToInt().toFloat().coerceIn(75.0f, 90.0f)
             
             // Update LoudnessController
-            loudnessController.setTargetSpl(targetSpl)
-            loudnessController.setReferenceLevel(referenceLevel)
+            loudnessController.setTargetPhon(targetPhon)
+            loudnessController.setReferencePhon(referencePhon)
             loudnessController.setCalibrationOffset(calibrationOffset)
             
             // Update displays
@@ -1237,7 +1204,7 @@ class LoudnessControllerActivity : AppCompatActivity() {
         // Calculate amplitude based on calibration step
         val amplitude = if (calibrationStep == 2 && maxSplMeasurement > 0) {
             // Step 2: Reduce amplitude by the attenuation amount
-            val attenuation = maxSplMeasurement - targetSpl
+            val attenuation = maxSplMeasurement - targetPhon
             val linearGain = 10.0f.pow(-attenuation / 20.0f)
             Timber.d("Pink noise Step 2: attenuation=$attenuation dB, linearGain=$linearGain")
             linearGain

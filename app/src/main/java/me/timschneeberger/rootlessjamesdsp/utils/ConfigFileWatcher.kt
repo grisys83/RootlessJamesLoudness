@@ -488,7 +488,7 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
                 if (parts.size == 2) {
                     val refDb = parts[1].trim().toFloatOrNull()
                     refDb?.let {
-                        loudnessController?.setReferenceLevel(-40.0f + it) // Convert SPL to LUFS
+                        loudnessController?.setReferencePhon(-40.0f + it) // Convert SPL to LUFS
                         hasChanges = true
                     }
                 }
@@ -508,7 +508,7 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
      */
     private fun applyAutoLoudnessFilter() {
         // Get target SPL directly from loudness controller
-        val targetSPL = loudnessController?.getTargetSpl() ?: 60.0f
+        val targetSPL = loudnessController?.getTargetPhon() ?: 60.0f
         
         applyLoudnessFilterForVolume(targetSPL)
     }
