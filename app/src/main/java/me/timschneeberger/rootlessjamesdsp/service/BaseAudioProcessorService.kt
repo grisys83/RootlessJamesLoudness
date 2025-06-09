@@ -9,22 +9,28 @@ import java.lang.ref.WeakReference
 abstract class BaseAudioProcessorService : Service() {
     private var binder: LocalBinder? = null
 
-    inner class LocalBinder : Binder() {
-        private val serviceRef = WeakReference(this@BaseAudioProcessorService)
+    // Make LocalBinder static to avoid implicit reference to outer class
+    class LocalBinder(service: BaseAudioProcessorService) : Binder() {
+        private val serviceRef = WeakReference(service)
         
         val service: BaseAudioProcessorService?
             get() = serviceRef.get()
+            
+        fun clear() {
+            serviceRef.clear()
+        }
     }
 
     override fun onBind(intent: Intent): IBinder? {
         if (binder == null) {
-            binder = LocalBinder()
+            binder = LocalBinder(this)
         }
         return binder
     }
 
     override fun onUnbind(intent: Intent?): Boolean {
         // Clear binder reference to prevent leaks
+        binder?.clear()
         binder = null
         return false // Don't allow rebind
     }
@@ -37,6 +43,7 @@ abstract class BaseAudioProcessorService : Service() {
     override fun onDestroy() {
         activeServices--
         // Ensure binder is cleared
+        binder?.clear()
         binder = null
         super.onDestroy()
     }

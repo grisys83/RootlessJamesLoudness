@@ -48,6 +48,7 @@ class LoudnessController(private val context: Context) : KoinComponent {
         const val KEY_LOUDNESS_ENABLED = "loudness_enabled"
         const val KEY_TARGET_SPL = "loudness_target_spl"
         const val KEY_CALIBRATION_OFFSET = "loudness_calibration_offset"
+        const val KEY_AUTO_REFERENCE = "loudness_auto_reference"
         
         // Reference step size
         const val REFERENCE_STEP_DB = 1.0f
@@ -83,6 +84,8 @@ class LoudnessController(private val context: Context) : KoinComponent {
     private var loudnessEnabled: Boolean = false
     private var targetSpl: Float = 60.0f
     private var calibrationOffset: Float = 0.0f
+    private var maxSpl: Float = 125.0f  // Maximum SPL from calibration
+    private var autoReference: Boolean = false  // Auto reference mode
     
     init {
         loadSettings()
@@ -119,11 +122,29 @@ class LoudnessController(private val context: Context) : KoinComponent {
     }
     
     /**
+     * Get max SPL
+     */
+    fun getMaxSpl(): Float {
+        return maxSpl
+    }
+    
+    /**
+     * Set max SPL from calibration
+     */
+    fun setMaxSpl(spl: Float) {
+        maxSpl = spl.coerceIn(60f, 130f)
+        saveSettings()
+        updateLoudness()
+    }
+    
+    /**
      * Perform calibration
      */
     fun performCalibration(measuredSpl: Float, expectedSpl: Float) {
-        // Calibration offset = measured - expected
-        calibrationOffset = measuredSpl - expectedSpl
+        // Calibration offset = expected - measured
+        // Negative means system is louder than expected
+        // Positive means system is quieter than expected
+        calibrationOffset = expectedSpl - measuredSpl
         saveSettings()
         updateLoudness()
     }
@@ -172,6 +193,12 @@ class LoudnessController(private val context: Context) : KoinComponent {
      */
     fun setTargetSpl(spl: Float) {
         targetSpl = spl.coerceIn(0f, 125f)
+        
+        // Auto-adjust reference level if auto reference mode is enabled
+        if (autoReference) {
+            referenceLevel = calculateAutoReference(targetSpl)
+        }
+        
         saveSettings()
         updateLoudness()
     }
@@ -190,6 +217,47 @@ class LoudnessController(private val context: Context) : KoinComponent {
      */
     fun isLoudnessEnabled(): Boolean {
         return loudnessEnabled
+    }
+    
+    /**
+     * Get auto reference mode state
+     */
+    fun isAutoReferenceEnabled(): Boolean {
+        return autoReference
+    }
+    
+    /**
+     * Set auto reference mode
+     */
+    fun setAutoReferenceEnabled(enabled: Boolean) {
+        autoReference = enabled
+        
+        // If enabling auto reference, calculate the appropriate reference level
+        if (enabled) {
+            referenceLevel = calculateAutoReference(targetSpl)
+        }
+        
+        saveSettings()
+        updateLoudness()
+    }
+    
+    /**
+     * Calculate auto reference level based on target SPL
+     */
+    private fun calculateAutoReference(target: Float): Float {
+        return when {
+            target < 44.0f -> 75.0f
+            target < 48.0f -> 76.0f
+            target < 52.0f -> 77.0f
+            target < 60.0f -> 78.0f
+            target < 64.0f -> 79.0f
+            target < 80.0f -> 80.0f
+            else -> {
+                // For target >= 80, find the closest integer >= target, but not exceeding 90
+                val ceiling = kotlin.math.ceil(target).toFloat()
+                ceiling.coerceAtMost(90.0f)
+            }
+        }
     }
     
     /**
@@ -269,22 +337,28 @@ spl1 *= gainLin;
         // Real vol is the user's target SPL (what they set with the slider)
         val realVol = targetSpl
         
-        // User wanted gain (additional adjustment, default 0)
-        val userGain = preferences.preferences.getFloat("loudness_user_gain", 0.0f)
+        // Remove legacy userGain - now handled by attenuation
         
         // For FIR filter selection, clamp to available range (40-90)
         val clampedTargetForFir = targetSpl.coerceIn(40f, 90f)
         
-        // Get FIR preamp for the clamped target
-        val firPreamp = getFirPreampForLevel(referenceLevel, clampedTargetForFir)
+        // Get FIR compensation for the clamped target
+        val firCompensation = getFirPreampForLevel(referenceLevel, clampedTargetForFir)
+        
+        // Calculate attenuation needed (always positive)
+        val attenuation = maxSpl - targetSpl
         
         // Calculate Total EEL Gain
-        // Since FIR filters are normalized at 1kHz, they only apply frequency shaping
-        // The preamp compensates for the overall gain change from that shaping
-        // Formula: -calibOffset + firPreamp + userGain
-        val totalEelGain = -calibrationOffset + firPreamp + userGain
+        // System volume is at MAX, all control via negative EEL gain
+        // Formula: -attenuation + firCompensation + calibrationOffset
+        val totalEelGain = -attenuation + firCompensation + calibrationOffset
         
-        Timber.d("Loudness update: realVol=$realVol, referenceLevel=$referenceLevel, firPreamp=$firPreamp, calibOffset=$calibrationOffset, userGain=$userGain, totalEelGain=$totalEelGain")
+        Timber.d("=== Loudness Update Debug ===")
+        Timber.d("targetSpl=$targetSpl, maxSpl=$maxSpl")
+        Timber.d("attenuation = $maxSpl - $targetSpl = $attenuation")
+        Timber.d("firCompensation=$firCompensation, calibOffset=$calibrationOffset")
+        Timber.d("totalEelGain = -$attenuation + $firCompensation + $calibrationOffset = $totalEelGain")
+        Timber.d("==========================")
         
         // Generate EEL script
         val eelScript = generateEelScript(totalEelGain)
@@ -324,7 +398,17 @@ spl1 *= gainLin;
         val clampedTargetSpl = targetSpl.coerceIn(40f, 90f)
         
         // Select appropriate FIR filter file based on target SPL and reference level
-        val filterFile = String.format("%.1f-%.1f_filter.wav", clampedTargetSpl, referenceLevel)
+        // Ensure values are within valid ranges to prevent crashes
+        val safeTargetSpl = targetSpl.coerceIn(40f, 90f)
+        val safeReferenceLevel = referenceLevel.coerceIn(75f, 90f)
+        
+        // If target >= 90, always use 90.0-90.0_filter.wav
+        val filterFile = if (safeTargetSpl >= 90f) {
+            "90.0-90.0_filter.wav"
+        } else {
+            // Always format with 1 decimal place
+            String.format("%.1f-%.1f_filter.wav", safeTargetSpl, safeReferenceLevel)
+        }
         val filterPath = "Convolver/$filterFile"
         
         // Enable Convolver with the selected FIR filter
@@ -379,6 +463,8 @@ spl1 *= gainLin;
             putBoolean(KEY_LOUDNESS_ENABLED, loudnessEnabled)
             putFloat(KEY_TARGET_SPL, targetSpl)
             putFloat(KEY_CALIBRATION_OFFSET, calibrationOffset)
+            putFloat("loudness_max_spl", maxSpl)
+            putBoolean(KEY_AUTO_REFERENCE, autoReference)
             apply()
         }
     }
@@ -388,10 +474,27 @@ spl1 *= gainLin;
      */
     private fun loadSettings() {
         preferences.preferences.apply {
-            referenceLevel = getFloat(KEY_REFERENCE_LEVEL, DEFAULT_REFERENCE_LEVEL)
+            // Load values with safe defaults and coerce to valid ranges
+            referenceLevel = getFloat(KEY_REFERENCE_LEVEL, DEFAULT_REFERENCE_LEVEL).coerceIn(75.0f, 90.0f)
             loudnessEnabled = getBoolean(KEY_LOUDNESS_ENABLED, false)
-            targetSpl = getFloat(KEY_TARGET_SPL, 60.0f)
-            calibrationOffset = getFloat(KEY_CALIBRATION_OFFSET, 0.0f)
+            targetSpl = getFloat(KEY_TARGET_SPL, 60.0f).coerceIn(40.0f, 125.0f)
+            calibrationOffset = getFloat(KEY_CALIBRATION_OFFSET, 0.0f).coerceIn(-30.0f, 30.0f)
+            maxSpl = getFloat("loudness_max_spl", 125.0f).coerceIn(60.0f, 130.0f)
+            autoReference = getBoolean(KEY_AUTO_REFERENCE, false)
+        }
+        
+        // Validate loaded values to prevent crashes
+        if (referenceLevel.isNaN() || referenceLevel.isInfinite()) {
+            referenceLevel = DEFAULT_REFERENCE_LEVEL
+        }
+        if (targetSpl.isNaN() || targetSpl.isInfinite()) {
+            targetSpl = 60.0f
+        }
+        if (calibrationOffset.isNaN() || calibrationOffset.isInfinite()) {
+            calibrationOffset = 0.0f
+        }
+        if (maxSpl.isNaN() || maxSpl.isInfinite()) {
+            maxSpl = 125.0f
         }
     }
 }

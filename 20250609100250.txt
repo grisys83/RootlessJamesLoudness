@@ -6,7 +6,7 @@ HEAP ANALYSIS RESULT
 References underlined with "~~~" are likely causes.
 Learn more at https://squ.re/leaks.
 
-9422 bytes retained by leaking objects
+4144 bytes retained by leaking objects
 Signature: b140e0fc7b47dd3e69152b61c423ef92d64c2cdb
 ┬───
 │ GC Root: Global variable in native code
@@ -14,7 +14,7 @@ Signature: b140e0fc7b47dd3e69152b61c423ef92d64c2cdb
 ├─ me.timschneeberger.rootlessjamesdsp.service.
 │  BaseAudioProcessorService$LocalBinder instance
 │    Leaking: UNKNOWN
-│    Retaining 10.0 kB in 227 objects
+│    Retaining 556 B in 2 objects
 │    this$0 instance of me.timschneeberger.rootlessjamesdsp.service.
 │    RootlessAudioProcessorService
 │    ↓ BaseAudioProcessorService$LocalBinder.this$0
@@ -24,10 +24,10 @@ Signature: b140e0fc7b47dd3e69152b61c423ef92d64c2cdb
 ​     Leaking: YES (ObjectWatcher was watching this because me.timschneeberger.
 ​     rootlessjamesdsp.service.RootlessAudioProcessorService received
 ​     Service#onDestroy() callback and Service not held by ActivityThread)
-​     Retaining 9.4 kB in 225 objects
-​     key = 66b860de-9dc3-47c9-a23d-95de5f54cd3a
-​     watchDurationMillis = 30589
-​     retainedDurationMillis = 25524
+​     Retaining 4.1 kB in 157 objects
+​     key = 1018b94f-415d-456a-b545-f16b4f18aae6
+​     watchDurationMillis = 10856
+​     retainedDurationMillis = 5854
 ​     mApplication instance of me.timschneeberger.rootlessjamesdsp.
 ​     MainApplication
 ​     mBase instance of android.app.ContextImpl
@@ -53,34 +53,34 @@ Build.VERSION.SDK_INT: 30
 Build.MANUFACTURER: LGE
 LeakCanary version: 2.10
 App process name: me.timschneeberger.rootlessjamesdsp.debug
-Class count: 24938
-Instance count: 753084
-Primitive array count: 573195
-Object array count: 110068
-Thread count: 59
-Heap total bytes: 53152488
+Class count: 24195
+Instance count: 218168
+Primitive array count: 128855
+Object array count: 30969
+Thread count: 52
+Heap total bytes: 26335443
 Bitmap count: 1
 Bitmap total bytes: 38417
 Large bitmap count: 0
 Large bitmap total bytes: 0
-Db 1: closed /data/user/0/me.timschneeberger.rootlessjamesdsp.
-debug/databases/google_app_measurement_local.db
-Db 2: open /data/user/0/me.timschneeberger.rootlessjamesdsp.debug/databases/com.
-google.android.datatransport.events
-Db 3: open /data/user/0/me.timschneeberger.rootlessjamesdsp.
+Db 1: open /data/user/0/me.timschneeberger.rootlessjamesdsp.
 debug/databases/blocked_apps.db
+Db 2: closed /data/user/0/me.timschneeberger.rootlessjamesdsp.
+debug/databases/google_app_measurement_local.db
+Db 3: open /data/user/0/me.timschneeberger.rootlessjamesdsp.debug/databases/com.
+google.android.datatransport.events
 Db 4: open /data/user/0/me.timschneeberger.rootlessjamesdsp.
 debug/no_backup/androidx.work.workdb
 Db 5: open /data/user/0/me.timschneeberger.rootlessjamesdsp.
 debug/databases/_pluto_network_database
 Db 6: open /data/user/0/me.timschneeberger.rootlessjamesdsp.
 debug/databases/_pluto_exception_database
-Stats: LruCache[maxSize=3000,hits=62155,misses=165627,hitRate=27%]
-RandomAccess[bytes=8324781,reads=165627,travel=106098498936,range=75926528,size=
-83562624]
-Analysis duration: 7491 ms
+Stats: LruCache[maxSize=3000,hits=55854,misses=152761,hitRate=26%]
+RandomAccess[bytes=7610830,reads=152761,travel=48790954081,range=31678467,size=3
+8766791]
+Analysis duration: 5534 ms
 Heap dump file path: /storage/emulated/0/Download/leakcanary-me.timschneeberger.
-rootlessjamesdsp.debug/2025-06-07_17-43-38_326.hprof
-Heap dump timestamp: 1749285843284
+rootlessjamesdsp.debug/2025-06-09_10-02-22_256.hprof
+Heap dump timestamp: 1749430957037
 Heap dump duration: Unknown
 ====================================

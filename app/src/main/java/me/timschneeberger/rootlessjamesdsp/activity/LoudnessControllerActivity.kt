@@ -3,8 +3,12 @@ package me.timschneeberger.rootlessjamesdsp.activity
 import android.content.Context
 import android.content.Intent
 import android.media.AudioManager
+import android.media.AudioFormat
+import android.media.AudioTrack
+import android.media.AudioAttributes
 import android.os.Bundle
 import android.view.View
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.Toast
 import androidx.core.content.ContextCompat
@@ -37,8 +41,19 @@ import java.io.File
 import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.math.abs
+import androidx.appcompat.app.AppCompatActivity
+import me.timschneeberger.rootlessjamesdsp.utils.preferences.Preferences
+import org.koin.android.ext.android.inject
 
-class LoudnessControllerActivity : BaseActivity() {
+class LoudnessControllerActivity : AppCompatActivity() {
+    
+    init {
+        Timber.d("LoudnessControllerActivity: init block called")
+    }
+    
+    // Inject preferences using Koin
+    private val prefsApp: Preferences.App by inject()
     
     companion object {
         // Volume range constants
@@ -49,8 +64,8 @@ class LoudnessControllerActivity : BaseActivity() {
         // Default reference level  
         const val DEFAULT_REFERENCE_PHON = 80.0f
         
-        // Preamp lookup table
-        private val preampTable = mapOf(
+        // FIR compensation lookup table (to compensate for filter's nonlinear gain)
+        private val firCompensationTable = mapOf(
             75f to mapOf(40f to -25.06f, 50f to -20.60f, 60f to -16.29f, 70f to -11.67f, 80f to -6.24f, 90f to -0.80f),
             80f to mapOf(40f to -27.72f, 50f to -23.26f, 60f to -18.95f, 70f to -14.33f, 80f to -8.90f, 90f to -3.47f),
             85f to mapOf(40f to -30.18f, 50f to -25.72f, 60f to -21.40f, 70f to -16.79f, 80f to -11.36f, 90f to -5.92f),
@@ -68,44 +83,123 @@ class LoudnessControllerActivity : BaseActivity() {
     private lateinit var realVolumeValueText: MaterialTextView
     private lateinit var referenceSlider: Slider
     private lateinit var referenceValueText: MaterialTextView
-    private lateinit var targetPhonText: MaterialTextView
-    private lateinit var offsetText: MaterialTextView
-    private lateinit var preampText: MaterialTextView
     private lateinit var measuredSplInput: TextInputEditText
     private lateinit var calibrateButton: MaterialButton
     private lateinit var calibrationStatusText: MaterialTextView
     private lateinit var calculationDetailsText: MaterialTextView
+    private lateinit var autoReferenceSwitch: com.google.android.material.switchmaterial.SwitchMaterial
+    
+    // New calibration buttons
+    private lateinit var prepareMaxSplButton: MaterialButton
+    private lateinit var saveMaxSplButton: MaterialButton
+    private lateinit var prepare80dbButton: MaterialButton
+    private lateinit var save80dbButton: MaterialButton
+    private lateinit var prepare75dbButton: MaterialButton
+    private lateinit var save75dbButton: MaterialButton
+    private lateinit var resetCalibrationButton: MaterialButton
+    private lateinit var saveProfileButton: MaterialButton
+    private lateinit var loadProfileButton: MaterialButton
+    private lateinit var pinkNoiseButton: MaterialButton
+    
+    // New unified calibration UI elements
+    private lateinit var startCalibrationButton: MaterialButton
+    private lateinit var calibrationProgressLayout: LinearLayout
+    private lateinit var calibrationProgress: com.google.android.material.progressindicator.LinearProgressIndicator
+    private lateinit var calibrationStepText: MaterialTextView
+    private lateinit var calibrationInputLayout: LinearLayout
+    private lateinit var calibrationInstructionText: MaterialTextView
+    private lateinit var saveMeasurementButton: MaterialButton
+    private lateinit var cancelCalibrationButton: MaterialButton
+    
+    // Calibration state
+    private var calibrationStep = 0
+    private var maxSplMeasurement = 0.0f
+    private var isCalibrating = false
     
     // Current values
     private var targetSpl = DEFAULT_VOLUME_DB  // This is what the user sets with the slider (real vol)
     private var referenceLevel = DEFAULT_REFERENCE_PHON
     private var calibrationOffset = 0.0f  // Calibration offset from measurement
+    private var maxDynamicSpl = MAX_VOLUME_DB  // User-configurable max SPL
     
     // Audio manager for volume control
     private lateinit var audioManager: AudioManager
     
-    // Loudness controller
-    private lateinit var loudnessController: me.timschneeberger.rootlessjamesdsp.utils.LoudnessController
+    // Loudness controller - lazy initialization to ensure Koin is ready
+    private val loudnessController: me.timschneeberger.rootlessjamesdsp.utils.LoudnessController by lazy {
+        try {
+            me.timschneeberger.rootlessjamesdsp.utils.LoudnessController(this)
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to initialize LoudnessController")
+            throw e
+        }
+    }
     
     // Auto-apply job
     private var autoApplyJob: Job? = null
     
+    // Pink noise generator
+    private var audioTrack: AudioTrack? = null
+    private var noiseGeneratorJob: Job? = null
+    private var isPlayingNoise = false
+    
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_loudness_controller)
+        Timber.d("LoudnessControllerActivity: onCreate started")
         
-        // Initialize AudioManager
-        audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        try {
+            setContentView(R.layout.activity_loudness_controller)
+            Timber.d("LoudnessControllerActivity: setContentView completed")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to set content view")
+            finish()
+            return
+        }
         
-        // Initialize LoudnessController
-        loudnessController = me.timschneeberger.rootlessjamesdsp.utils.LoudnessController(this)
+        try {
+            // Initialize AudioManager
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            Timber.d("LoudnessControllerActivity: AudioManager initialized")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to initialize AudioManager")
+            finish()
+            return
+        }
         
-        initializeViews()
-        setupToolbar()
-        setupSliders()
-        setupCalibration()
-        loadCurrentSettings()
-        updateDisplay()
+        // LoudnessController is now lazy initialized
+        
+        try {
+            initializeViews()
+            Timber.d("LoudnessControllerActivity: Views initialized")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to initialize views")
+            finish()
+            return
+        }
+        
+        try {
+            setupToolbar()
+            setupSliders()
+            Timber.d("LoudnessControllerActivity: Toolbar and sliders setup completed")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to setup toolbar or sliders")
+        }
+        
+        // Delay controller-dependent initialization to ensure views and Koin are ready
+        window.decorView.post {
+            try {
+                // Add a small delay to ensure all views are fully initialized
+                window.decorView.postDelayed({
+                    setupCalibration()
+                    loadCurrentSettings()
+                    updateDisplay()
+                }, 100)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to initialize loudness controller components")
+                toast("Failed to initialize loudness controller")
+                finish()
+            }
+        }
         
         // EEL files are loaded on-demand directly from assets (no copying needed)
     }
@@ -120,13 +214,33 @@ class LoudnessControllerActivity : BaseActivity() {
         realVolumeValueText = findViewById(R.id.real_volume_value_text)
         referenceSlider = findViewById(R.id.reference_slider)
         referenceValueText = findViewById(R.id.reference_value_text)
-        targetPhonText = findViewById(R.id.target_phon_text)
-        offsetText = findViewById(R.id.offset_text)
-        preampText = findViewById(R.id.preamp_text)
         measuredSplInput = findViewById(R.id.measured_spl_input)
         calibrateButton = findViewById(R.id.calibrate_button)
         calibrationStatusText = findViewById(R.id.calibration_status_text)
         calculationDetailsText = findViewById(R.id.calculation_details_text)
+        
+        // Initialize new calibration buttons
+        prepareMaxSplButton = findViewById(R.id.prepare_max_spl_button)
+        saveMaxSplButton = findViewById(R.id.save_max_spl_button)
+        prepare80dbButton = findViewById(R.id.prepare_80db_button)
+        save80dbButton = findViewById(R.id.save_80db_button)
+        prepare75dbButton = findViewById(R.id.prepare_75db_button)
+        save75dbButton = findViewById(R.id.save_75db_button)
+        resetCalibrationButton = findViewById(R.id.reset_calibration_button)
+        saveProfileButton = findViewById(R.id.save_profile_button)
+        loadProfileButton = findViewById(R.id.load_profile_button)
+        pinkNoiseButton = findViewById(R.id.pink_noise_button)
+        
+        // Initialize new unified calibration UI elements
+        startCalibrationButton = findViewById(R.id.start_calibration_button)
+        calibrationProgressLayout = findViewById(R.id.calibration_progress_layout)
+        calibrationProgress = findViewById(R.id.calibration_progress)
+        calibrationStepText = findViewById(R.id.calibration_step_text)
+        calibrationInputLayout = findViewById(R.id.calibration_input_layout)
+        calibrationInstructionText = findViewById(R.id.calibration_instruction_text)
+        saveMeasurementButton = findViewById(R.id.save_measurement_button)
+        cancelCalibrationButton = findViewById(R.id.cancel_calibration_button)
+        autoReferenceSwitch = findViewById(R.id.auto_reference_switch)
     }
     
     private fun setupToolbar() {
@@ -141,15 +255,26 @@ class LoudnessControllerActivity : BaseActivity() {
     private fun setupSliders() {
         // Real Volume Slider
         realVolumeSlider.apply {
-            valueFrom = 0.0f  // Start from 0 dB for real measurement
-            valueTo = 125.0f  // Extended range for high SPL measurements
+            valueFrom = 40.0f  // Start from 40 dB as requested
+            valueTo = MAX_VOLUME_DB  // Will be updated based on calibration
             stepSize = 0.1f
-            value = targetSpl
+            value = DEFAULT_VOLUME_DB  // Set default, will be updated in loadCurrentSettings()
             
             addOnChangeListener { _, value, fromUser ->
                 if (fromUser) {
                     targetSpl = value  // Real vol = target SPL
                     realVolumeValueText.text = String.format("%.1f", value)
+                    
+                    // Update reference if auto mode is enabled
+                    if (loudnessController.isAutoReferenceEnabled()) {
+                        // Update target SPL in controller first, which will auto-calculate new reference
+                        loudnessController.setTargetSpl(value)
+                        // Get the newly calculated reference level
+                        referenceLevel = loudnessController.getReferenceLevel()
+                        referenceSlider.value = referenceLevel.coerceIn(75.0f, 90.0f)
+                        referenceValueText.text = referenceLevel.toInt().toString()
+                    }
+                    
                     updateDisplay()
                     // Don't apply during dragging
                 }
@@ -173,7 +298,7 @@ class LoudnessControllerActivity : BaseActivity() {
             valueFrom = 75.0f
             valueTo = 90.0f
             stepSize = 1.0f
-            value = referenceLevel
+            value = DEFAULT_REFERENCE_PHON  // Set default, will be updated in loadCurrentSettings()
             
             addOnChangeListener { _, value, fromUser ->
                 if (fromUser) {
@@ -202,8 +327,71 @@ class LoudnessControllerActivity : BaseActivity() {
         // Update calibration status on startup
         updateCalibrationStatus()
         
+        // Setup auto reference switch
+        autoReferenceSwitch.setOnCheckedChangeListener { _, isChecked ->
+            loudnessController.setAutoReferenceEnabled(isChecked)
+            referenceSlider.isEnabled = !isChecked  // Disable manual control when auto is on
+            
+            if (isChecked) {
+                // Update UI to show auto-calculated reference
+                referenceLevel = loudnessController.getReferenceLevel()
+                referenceSlider.value = referenceLevel
+                referenceValueText.text = referenceLevel.toInt().toString()
+            }
+            
+            updateDisplay()
+        }
+        
+        // New unified calibration flow
+        startCalibrationButton.setOnClickListener {
+            startCalibrationFlow()
+        }
+        
+        saveMeasurementButton.setOnClickListener {
+            saveCurrentMeasurement()
+        }
+        
+        cancelCalibrationButton.setOnClickListener {
+            cancelCalibration()
+        }
+        
+        // Keep legacy button handlers for compatibility
         calibrateButton.setOnClickListener {
             performCalibration()
+        }
+        
+        resetCalibrationButton.setOnClickListener {
+            resetCalibration()
+        }
+        
+        saveProfileButton.setOnClickListener {
+            // Show dialog to select profile slot (1-3)
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Save Profile")
+                .setItems(arrayOf("Profile 1", "Profile 2", "Profile 3")) { _, which ->
+                    saveProfile(which + 1)
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+        
+        loadProfileButton.setOnClickListener {
+            // Show dialog to select profile slot (1-3)
+            MaterialAlertDialogBuilder(this)
+                .setTitle("Load Profile")
+                .setItems(arrayOf("Profile 1", "Profile 2", "Profile 3")) { _, which ->
+                    loadProfile(which + 1)
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
+        
+        pinkNoiseButton.setOnClickListener {
+            if (isPlayingNoise) {
+                stopPinkNoise()
+            } else {
+                startPinkNoise()
+            }
         }
     }
     
@@ -230,11 +418,25 @@ class LoudnessControllerActivity : BaseActivity() {
     }
     
     private fun updateCalibrationStatus() {
-        if (calibrationOffset != 0.0f) {
-            calibrationStatusText.text = "Calibration offset: ${String.format("%.1f", calibrationOffset)} dB"
-            calibrationStatusText.visibility = View.VISIBLE
+        val hasCalibration = calibrationOffset != 0.0f || maxDynamicSpl != MAX_VOLUME_DB
+        
+        if (hasCalibration) {
+            val statusText = StringBuilder()
+            statusText.append("Calibrated")
+            
+            if (calibrationOffset != 0.0f) {
+                statusText.append(" (Offset: ${String.format("%+.1f", calibrationOffset)} dB)")
+            }
+            
+            if (maxDynamicSpl != MAX_VOLUME_DB) {
+                statusText.append(" (Max: ${String.format("%.1f", maxDynamicSpl)} dB)")
+            }
+            
+            calibrationStatusText.text = statusText.toString()
+            calibrationStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.holo_green_dark))
         } else {
-            calibrationStatusText.visibility = View.GONE
+            calibrationStatusText.text = "Not calibrated"
+            calibrationStatusText.setTextColor(ContextCompat.getColor(this, android.R.color.holo_red_dark))
         }
     }
     
@@ -254,15 +456,58 @@ class LoudnessControllerActivity : BaseActivity() {
     
     
     private fun loadCurrentSettings() {
-        // Load saved settings
-        targetSpl = loudnessController.getTargetSpl()
-        referenceLevel = loudnessController.getReferenceLevel()
-        calibrationOffset = loudnessController.getCalibrationOffset()
-        
-        realVolumeSlider.value = targetSpl
-        realVolumeValueText.text = String.format("%.1f", targetSpl)
-        referenceSlider.value = referenceLevel
-        referenceValueText.text = referenceLevel.toInt().toString()
+        try {
+            // Load saved settings with safe access
+            targetSpl = try {
+                loudnessController.getTargetSpl()
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to get target SPL from controller")
+                DEFAULT_VOLUME_DB
+            }
+            
+            referenceLevel = try {
+                loudnessController.getReferenceLevel()
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to get reference level from controller")
+                DEFAULT_REFERENCE_PHON
+            }
+            
+            calibrationOffset = try {
+                loudnessController.getCalibrationOffset()
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to get calibration offset from controller")
+                0.0f
+            }
+            
+            maxDynamicSpl = try {
+                loudnessController.getMaxSpl()
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to get max SPL from controller")
+                MAX_VOLUME_DB
+            }
+            
+            // Update slider range based on max SPL
+            realVolumeSlider.valueTo = maxDynamicSpl
+            
+            // Load auto reference state
+            autoReferenceSwitch.isChecked = loudnessController.isAutoReferenceEnabled()
+            referenceSlider.isEnabled = !loudnessController.isAutoReferenceEnabled()
+            
+            // Round values to match step size and ensure they're within bounds
+            realVolumeSlider.value = ((targetSpl * 10).roundToInt() / 10f).coerceIn(realVolumeSlider.valueFrom, realVolumeSlider.valueTo)
+            realVolumeValueText.text = String.format("%.1f", targetSpl)
+            
+            // Ensure reference level is within slider bounds (75-90)
+            val clampedReferenceLevel = referenceLevel.roundToInt().toFloat().coerceIn(75.0f, 90.0f)
+            referenceSlider.value = clampedReferenceLevel
+            referenceValueText.text = clampedReferenceLevel.toInt().toString()
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to load current settings")
+            // Use default values if loading fails
+            realVolumeSlider.valueTo = MAX_VOLUME_DB
+            realVolumeSlider.value = DEFAULT_VOLUME_DB
+            referenceSlider.value = DEFAULT_REFERENCE_PHON
+        }
     }
     
     private fun updateDisplay() {
@@ -272,20 +517,15 @@ class LoudnessControllerActivity : BaseActivity() {
         // Update main display with safety colors
         updateMainDisplay(realDbSpl)
         
-        // Calculate preamp from FIR filter
-        val preamp = getPreamp(targetSpl, referenceLevel)
-        
-        // Update calculated values
-        targetPhonText.text = String.format("%.1f phon", targetSpl)
-        offsetText.text = String.format("%.1f dB", calibrationOffset)
-        preampText.text = String.format("%.1f dB", preamp)
+        // Calculate FIR compensation from table
+        val firCompensation = getFirCompensation(targetSpl, referenceLevel)
         
         // Update technical parameters text
-        technicalParamsText.text = String.format("T%.0f R%.0f C:%.1f P:%.1f", 
-            targetSpl, referenceLevel, calibrationOffset, preamp)
+        technicalParamsText.text = String.format("T%.0f R%.0f C:%.1f F:%.1f", 
+            targetSpl, referenceLevel, calibrationOffset, firCompensation)
         
         // Update calculation details
-        updateCalculationDetails(preamp)
+        updateCalculationDetails(firCompensation)
     }
     
     private fun updateReferenceSliderRange() {
@@ -294,50 +534,56 @@ class LoudnessControllerActivity : BaseActivity() {
         referenceLevel = referenceLevel.coerceIn(75.0f, 90.0f)
     }
     
-    private fun updateCalculationDetails(firPreamp: Float) {
-        // Get user gain from LoudnessController preferences
-        val userGain = prefsApp.preferences.getFloat("loudness_user_gain", 0.0f)
-        
-        // Calculate Total EEL Gain
-        val totalEelGain = -calibrationOffset + firPreamp + userGain
-        
-        // Expected SPL without calibration
-        val expectedSplWithoutCalib = targetSpl
-        
-        // Build detailed calculation text
+    private fun updateCalculationDetails(firCompensation: Float) {
+        // Build calculation text following the agreed format
         val calculationText = StringBuilder()
         
-        calculationText.append("📥 Input Values:\n")
-        calculationText.append("  • Target SPL (Slider): %.1f dB\n".format(targetSpl))
-        calculationText.append("  • Reference Level: %.0f phon\n".format(referenceLevel))
-        calculationText.append("  • Calibration Offset: %.1f dB\n".format(calibrationOffset))
-        calculationText.append("  • User Gain: %.1f dB\n\n".format(userGain))
+        // Show current settings
+        calculationText.append("Target SPL: %.1f dB\n".format(targetSpl))
+        calculationText.append("Reference: %.0f phon\n".format(referenceLevel))
         
-        calculationText.append("🎛️ FIR Filter Selection:\n")
-        val clampedTarget = targetSpl.coerceIn(40f, 90f)
-        calculationText.append("  • Clamped Target: %.1f dB\n".format(clampedTarget))
-        calculationText.append("  • Filter File: %.1f-%.1f_filter.wav\n".format(clampedTarget, referenceLevel))
-        calculationText.append("  • FIR Preamp: %.2f dB\n\n".format(firPreamp))
-        
-        calculationText.append("🧮 Gain Calculation:\n")
-        calculationText.append("  Total EEL Gain = -CalibOffset + FIR Preamp + User Gain\n")
-        calculationText.append("  Total EEL Gain = -(%.1f) + (%.2f) + (%.1f)\n".format(calibrationOffset, firPreamp, userGain))
-        calculationText.append("  Total EEL Gain = %.2f dB\n\n".format(totalEelGain))
-        
-        calculationText.append("🔊 Signal Flow:\n")
-        calculationText.append("  1. Audio Input\n")
-        calculationText.append("  2. → FIR Filter (Loudness Curve + %.2f dB)\n".format(firPreamp))
-        calculationText.append("  3. → EEL Gain (%.2f dB)\n".format(totalEelGain))
-        calculationText.append("  4. → Audio Output\n\n")
-        
-        calculationText.append("📐 Expected Output:\n")
-        if (calibrationOffset != 0f) {
-            val uncalibratedOutput = targetSpl + calibrationOffset
-            calculationText.append("  Without Calibration: %.1f dB\n".format(uncalibratedOutput))
-            calculationText.append("  With Calibration: %.1f dB ✓\n".format(targetSpl))
-        } else {
-            calculationText.append("  Output: %.1f dB\n".format(targetSpl))
+        // Show calibration info if available
+        if (calibrationOffset != 0.0f) {
+            // Show calibration offset with clear meaning
+            val offsetDescription = when {
+                calibrationOffset < 0 -> "System is %.1f dB louder than expected".format(kotlin.math.abs(calibrationOffset))
+                calibrationOffset > 0 -> "System is %.1f dB quieter than expected".format(kotlin.math.abs(calibrationOffset))
+                else -> "System matches expected level"
+            }
+            calculationText.append("Calibration: %s\n".format(offsetDescription))
+            calculationText.append("Calibration Offset = %+.1f dB\n".format(calibrationOffset))
         }
+        
+        // FIR compensation from lookup table (always negative for attenuation)
+        calculationText.append("FIR Compensation (nonlinear gain correction) = %.2f dB\n".format(firCompensation))
+        calculationText.append("(Always negative to correct filter gain)\n")
+        
+        // Total EEL Gain calculation (for loudness compensation only)
+        val totalEelGain = firCompensation + calibrationOffset
+        calculationText.append("Loudness Compensation = FIR Comp + Calib Offset\n")
+        calculationText.append("Loudness Compensation = (%.2f) + (%+.1f) = %.2f dB\n\n".format(
+            firCompensation, calibrationOffset, totalEelGain))
+        
+        // Real Volume calculation (for clarity)
+        val attenuation = maxDynamicSpl - targetSpl
+        calculationText.append("Real Vol = Target SPL = %.1f dB\n".format(targetSpl))
+        calculationText.append("Attenuation Required = Max SPL - Target SPL\n")
+        calculationText.append("Attenuation Required = %.1f - %.1f = %.1f dB\n\n".format(maxDynamicSpl, targetSpl, attenuation))
+        
+        // Volume control mechanism
+        calculationText.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+        calculationText.append("Final EEL Gain Calculation:\n")
+        calculationText.append("EEL Gain = -Attenuation + FIR Comp + Calib Offset\n")
+        calculationText.append("EEL Gain = -(%.1f) + (%.2f) + (%+.1f)\n".format(attenuation, firCompensation, calibrationOffset))
+        calculationText.append("EEL Gain = %.2f + %.2f\n".format(-attenuation, totalEelGain))
+        calculationText.append("EEL Gain = %.2f dB\n\n".format(-attenuation + totalEelGain))
+        calculationText.append("System volume stays at MAX\n")
+        calculationText.append("All control via negative EEL gain\n")
+        calculationText.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+        
+        // Filter info
+        val clampedTarget = targetSpl.coerceIn(40f, 90f)
+        calculationText.append("Filter: %.1f-%.1f_filter.wav".format(clampedTarget, referenceLevel))
         
         calculationDetailsText.text = calculationText.toString()
     }
@@ -380,6 +626,48 @@ class LoudnessControllerActivity : BaseActivity() {
         }
     }
     
+    private fun applyLoudnessSettingsForCalibration() {
+        // Special version for calibration that doesn't mute
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                // For Step 1, we need to temporarily set high maxSpl
+                // For Step 2, we should use the actual measured maxSpl
+                if (calibrationStep == 1) {
+                    // Step 1: Set a very high temporary maxSpl to prevent crashes
+                    loudnessController.setMaxSpl(MAX_VOLUME_DB)  // 125.0f
+                }
+                // Step 2 will use the actual maxSpl set in Step 1
+                
+                // Update LoudnessController with current values
+                with(loudnessController) {
+                    setReferenceLevel(referenceLevel)
+                    setTargetSpl(targetSpl)
+                    setLoudnessEnabled(true)
+                }
+                
+                Timber.d("LoudnessController: Calibration settings applied - Target: $targetSpl, Reference: $referenceLevel")
+                
+                // Enable master switch if needed
+                val wasPoweredOn = prefsApp.preferences.getBoolean(getString(R.string.key_powered_on), false)
+                if (!wasPoweredOn) {
+                    Timber.d("LoudnessController: DSP was off, turning on")
+                    prefsApp.preferences.edit().putBoolean(getString(R.string.key_powered_on), true).apply()
+                    sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED))
+                    Thread.sleep(500)
+                }
+                
+                withContext(Dispatchers.Main) {
+                    updateDisplay()
+                }
+                
+            } catch (e: Exception) {
+                Timber.e(e, "Error applying calibration settings")
+                withContext(Dispatchers.Main) {
+                    toast("Failed to apply calibration settings")
+                }
+            }
+        }
+    }
     
     private fun applyLoudnessSettings() {
         CoroutineScope(Dispatchers.IO).launch {
@@ -437,13 +725,13 @@ class LoudnessControllerActivity : BaseActivity() {
                 audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, currentSystemVolume, 0)
                 
                 // Verify settings were applied (optional - for debugging)
-                val convolverPrefs = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
+                val convolverPrefs = getSharedPreferences(Constants.PREF_CONVOLVER, Context.MODE_PRIVATE)
                 val convolverEnabled = convolverPrefs.getBoolean(getString(R.string.key_convolver_enable), false)
                 val convolverFile = convolverPrefs.getString(getString(R.string.key_convolver_file), "")
                 Timber.d("LoudnessController: After config - Convolver enabled = $convolverEnabled")
                 Timber.d("LoudnessController: After config - Convolver file = $convolverFile")
                 
-                val liveprogPrefs = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
+                val liveprogPrefs = getSharedPreferences(Constants.PREF_LIVEPROG, Context.MODE_PRIVATE)
                 val liveprogEnabled = liveprogPrefs.getBoolean(getString(R.string.key_liveprog_enable), false)
                 val liveprogFile = liveprogPrefs.getString(getString(R.string.key_liveprog_file), "")
                 Timber.d("LoudnessController: After config - Liveprog enabled = $liveprogEnabled")
@@ -460,9 +748,9 @@ class LoudnessControllerActivity : BaseActivity() {
                 
                 // Final verification after giving ConfigFileWatcher time to work
                 Thread.sleep(1000)
-                val finalConvolverFile = getSharedPreferences(Constants.PREF_CONVOLVER, MODE_PRIVATE)
+                val finalConvolverFile = getSharedPreferences(Constants.PREF_CONVOLVER, Context.MODE_PRIVATE)
                     .getString(getString(R.string.key_convolver_file), "")
-                val finalLiveprogFile = getSharedPreferences(Constants.PREF_LIVEPROG, MODE_PRIVATE)
+                val finalLiveprogFile = getSharedPreferences(Constants.PREF_LIVEPROG, Context.MODE_PRIVATE)
                     .getString(getString(R.string.key_liveprog_file), "")
                 Timber.d("LoudnessController: Final verification - Convolver = $finalConvolverFile")
                 Timber.d("LoudnessController: Final verification - Liveprog = $finalLiveprogFile")
@@ -509,10 +797,10 @@ class LoudnessControllerActivity : BaseActivity() {
     }
     
     
-    private fun getPreamp(listeningLevel: Float, referenceLevel: Float): Float {
-        // Since we don't have preamp data for all reference levels (76-89),
+    private fun getFirCompensation(listeningLevel: Float, referenceLevel: Float): Float {
+        // Since we don't have compensation data for all reference levels (76-89),
         // we'll interpolate between the available reference levels
-        val refKeys = preampTable.keys.sorted()
+        val refKeys = firCompensationTable.keys.sorted()
         
         // Find the two closest reference levels for interpolation
         var lowerRef = 75f
@@ -528,77 +816,555 @@ class LoudnessControllerActivity : BaseActivity() {
         
         // If exact match exists, use it
         if (referenceLevel in refKeys) {
-            val preamps = preampTable[referenceLevel]!!
-            val listenKeys = preamps.keys.sorted()
+            val compensations = firCompensationTable[referenceLevel]!!
+            val listenKeys = compensations.keys.sorted()
             
-            // Find appropriate preamp for listening level
-            if (listeningLevel in preamps) {
-                return preamps[listeningLevel]!!
+            // Find appropriate compensation for listening level
+            if (listeningLevel in compensations) {
+                return compensations[listeningLevel]!!
             }
             
             // Interpolate between listening levels
             for (i in 0 until listenKeys.size - 1) {
                 if (listeningLevel >= listenKeys[i] && listeningLevel <= listenKeys[i+1]) {
                     return interpolate(listeningLevel, listenKeys[i], listenKeys[i+1],
-                                     preamps[listenKeys[i]]!!, preamps[listenKeys[i+1]]!!)
+                                     compensations[listenKeys[i]]!!, compensations[listenKeys[i+1]]!!)
                 }
             }
             
             // Extrapolate if outside range
             return if (listeningLevel < listenKeys.first()) {
                 interpolate(listeningLevel, listenKeys[0], listenKeys[1],
-                           preamps[listenKeys[0]]!!, preamps[listenKeys[1]]!!)
+                           compensations[listenKeys[0]]!!, compensations[listenKeys[1]]!!)
             } else {
                 val size = listenKeys.size
                 interpolate(listeningLevel, listenKeys[size-2], listenKeys[size-1],
-                           preamps[listenKeys[size-2]]!!, preamps[listenKeys[size-1]]!!)
+                           compensations[listenKeys[size-2]]!!, compensations[listenKeys[size-1]]!!)
             }
         }
         
         // Interpolate between reference levels
-        val lowerPreamp = getPreampForExactReference(listeningLevel, lowerRef)
-        val upperPreamp = getPreampForExactReference(listeningLevel, upperRef)
+        val lowerCompensation = getCompensationForExactReference(listeningLevel, lowerRef)
+        val upperCompensation = getCompensationForExactReference(listeningLevel, upperRef)
         
-        return interpolate(referenceLevel, lowerRef, upperRef, lowerPreamp, upperPreamp)
+        return interpolate(referenceLevel, lowerRef, upperRef, lowerCompensation, upperCompensation)
     }
     
-    private fun getPreampForExactReference(listeningLevel: Float, referenceLevel: Float): Float {
-        val preamps = preampTable[referenceLevel] ?: return -20.0f // fallback
-        val listenKeys = preamps.keys.sorted()
+    private fun getCompensationForExactReference(listeningLevel: Float, referenceLevel: Float): Float {
+        val compensations = firCompensationTable[referenceLevel] ?: return -20.0f // fallback
+        val listenKeys = compensations.keys.sorted()
         
-        // Find appropriate preamp for listening level
-        if (listeningLevel in preamps) {
-            return preamps[listeningLevel]!!
+        // Find appropriate compensation for listening level
+        if (listeningLevel in compensations) {
+            return compensations[listeningLevel]!!
         }
         
         // Interpolate between listening levels
         for (i in 0 until listenKeys.size - 1) {
             if (listeningLevel >= listenKeys[i] && listeningLevel <= listenKeys[i+1]) {
                 return interpolate(listeningLevel, listenKeys[i], listenKeys[i+1],
-                                 preamps[listenKeys[i]]!!, preamps[listenKeys[i+1]]!!)
+                                 compensations[listenKeys[i]]!!, compensations[listenKeys[i+1]]!!)
             }
         }
         
         // Extrapolate if outside range
         return if (listeningLevel < listenKeys.first()) {
             interpolate(listeningLevel, listenKeys[0], listenKeys[1],
-                       preamps[listenKeys[0]]!!, preamps[listenKeys[1]]!!)
+                       compensations[listenKeys[0]]!!, compensations[listenKeys[1]]!!)
         } else {
             val size = listenKeys.size
             interpolate(listeningLevel, listenKeys[size-2], listenKeys[size-1],
-                       preamps[listenKeys[size-2]]!!, preamps[listenKeys[size-1]]!!)
+                       compensations[listenKeys[size-2]]!!, compensations[listenKeys[size-1]]!!)
         }
+    }
+    
+    private fun startCalibrationFlow() {
+        isCalibrating = true
+        calibrationStep = 1
+        
+        // Update UI for calibration mode
+        startCalibrationButton.visibility = View.GONE
+        calibrationProgressLayout.visibility = View.VISIBLE
+        calibrationInputLayout.visibility = View.VISIBLE
+        pinkNoiseButton.visibility = View.VISIBLE
+        cancelCalibrationButton.visibility = View.VISIBLE
+        resetCalibrationButton.visibility = View.GONE
+        
+        // Temporarily set slider range to maximum for calibration
+        // This will be updated after Step 1
+        realVolumeSlider.valueTo = MAX_VOLUME_DB
+        
+        // Disable main sliders during calibration
+        realVolumeSlider.isEnabled = false
+        referenceSlider.isEnabled = false
+        
+        // Start Step 1: Max SPL measurement
+        prepareStep1MaxSpl()
+    }
+    
+    private fun prepareStep1MaxSpl() {
+        calibrationStep = 1
+        calibrationProgress.progress = 50  // 50% for step 1
+        calibrationStepText.text = "Step 1 of 2: Max SPL Measurement"
+        calibrationInstructionText.text = "Set system volume to maximum and measure the SPL:"
+        
+        // For max SPL calibration, we need to temporarily set the slider range to allow 90
+        // Save current max value
+        val currentMaxValue = realVolumeSlider.valueTo
+        
+        // Temporarily extend range to allow 90
+        if (currentMaxValue < 90.0f) {
+            realVolumeSlider.valueTo = 90.0f
+        }
+        
+        // Set sliders for max SPL measurement
+        // Target 90, Reference 90 with only FIR compensation
+        realVolumeSlider.value = 90.0f
+        realVolumeValueText.text = "90.0"
+        targetSpl = 90.0f  // Explicitly set targetSpl
+        
+        referenceSlider.value = 90.0f
+        referenceValueText.text = "90"
+        referenceLevel = 90.0f  // Explicitly set referenceLevel
+        
+        // Apply these settings without muting during calibration
+        applyLoudnessSettingsForCalibration()
+        
+        // Update display to show correct values
+        updateDisplay()
+        
+        // Clear input field
+        measuredSplInput.setText("")
+        
+        // Force DSP update with a small delay for Step 1
+        window.decorView.postDelayed({
+            // Send broadcast again to ensure DSP picks up the changes
+            sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+                putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER, Constants.PREF_LIVEPROG))
+            })
+            Timber.d("Calibration Step 1: Forced DSP update for 90/90 settings")
+        }, 1000)
+        
+        // Auto-start pink noise
+        if (!isPlayingNoise) {
+            startPinkNoise()
+        }
+        
+        toast("Playing pink noise at 90/90 settings. Measure SPL now.")
+    }
+    
+    private fun prepareStep2_75dB() {
+        calibrationStep = 2
+        calibrationProgress.progress = 100  // 100% for step 2
+        calibrationStepText.text = "Step 2 of 2: 75 dB Calibration"
+        calibrationInstructionText.text = "Measure the SPL at 75 dB setting:"
+        
+        // IMPORTANT: For 75 dB calibration, we need to set the real volume to exactly 75 dB
+        val targetRealVolume = 75.0f
+        
+        // Update both the slider AND the targetSpl variable
+        realVolumeSlider.value = targetRealVolume
+        realVolumeValueText.text = String.format("%.1f", targetRealVolume)
+        targetSpl = targetRealVolume  // Explicitly set targetSpl
+        
+        // Set reference to 75 for 75/75 filter
+        referenceSlider.value = 75.0f
+        referenceValueText.text = "75"
+        referenceLevel = 75.0f  // Explicitly set referenceLevel
+        
+        // Apply these settings without muting during calibration
+        applyLoudnessSettingsForCalibration()
+        
+        // Update display to show correct values
+        updateDisplay()
+        
+        // Force DSP update without hard reboot to preserve maxSpl value
+        window.decorView.postDelayed({
+            // Send broadcast to update DSP settings
+            sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+                putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER, Constants.PREF_LIVEPROG))
+            })
+            Timber.d("Step 2: Forced DSP update for 75/75 settings")
+            toast("Ready to measure SPL at 75 dB setting")
+        }, 1000)
+        
+        // Clear input field
+        measuredSplInput.setText("")
+        
+        // Log current state for debugging
+        Timber.d("Step 2 preparation: targetSpl=$targetSpl, maxSpl=${loudnessController.getMaxSpl()}, expected attenuation=${loudnessController.getMaxSpl() - targetSpl}")
+        
+        // Use the calibration function that properly forces reload
+        CoroutineScope(Dispatchers.IO).launch {
+            delay(1000) // Give time for the settings to be saved
+            
+            withContext(Dispatchers.Main) {
+                // Check Liveprog status
+                val liveprogPrefs = getSharedPreferences(Constants.PREF_LIVEPROG, Context.MODE_PRIVATE)
+                val liveprogEnabled = liveprogPrefs.getBoolean(getString(R.string.key_liveprog_enable), false)
+                val liveprogFile = liveprogPrefs.getString(getString(R.string.key_liveprog_file), "")
+                
+                Timber.d("Step 2 - Liveprog status: enabled=$liveprogEnabled, file=$liveprogFile")
+                
+                // Check the actual EEL file
+                try {
+                    val eelFile = File(getExternalFilesDir(null), "Liveprog/loudnessCalibrated.eel")
+                    if (eelFile.exists()) {
+                        val content = eelFile.readText()
+                        val gainMatch = Regex("gainLin = exp\\(([-\\d.]+)").find(content)
+                        val gainDb = gainMatch?.groupValues?.get(1)
+                        Timber.d("EEL file gain: $gainDb dB")
+                        
+                        // If gain is significant (< -10 dB), warn the user
+                        if (gainDb != null && gainDb.toFloat() < -10) {
+                            toast("DSP gain set to $gainDb dB")
+                        }
+                    }
+                } catch (e: Exception) {
+                    Timber.e(e, "Failed to read EEL file")
+                }
+            }
+        }
+        
+        toast("Now playing at ${targetSpl.toInt()}/${referenceLevel.toInt()} settings. Measure SPL.")
+    }
+    
+    private fun saveCurrentMeasurement() {
+        val measuredValue = measuredSplInput.text?.toString()?.toFloatOrNull()
+        
+        if (measuredValue == null || measuredValue < 40f || measuredValue > 130f) {
+            toast("Please enter a valid SPL (40-130 dB)")
+            return
+        }
+        
+        // Stop pink noise automatically when saving measurement
+        if (isPlayingNoise) {
+            stopPinkNoise()
+        }
+        
+        when (calibrationStep) {
+            1 -> {
+                // Step 1: Save max SPL measurement
+                maxSplMeasurement = measuredValue
+                maxDynamicSpl = measuredValue  // This becomes our max SPL
+                
+                // Save to LoudnessController
+                loudnessController.setMaxSpl(maxDynamicSpl)
+                
+                // Update slider range
+                realVolumeSlider.valueTo = maxDynamicSpl
+                
+                toast("Max SPL saved: ${String.format("%.1f", maxDynamicSpl)} dB")
+                
+                // Log for debugging
+                Timber.d("Step 1 complete: maxSpl=$maxDynamicSpl, controller maxSpl=${loudnessController.getMaxSpl()}")
+                
+                // Move to step 2
+                prepareStep2_75dB()
+            }
+            2 -> {
+                // Step 2: Calculate calibration offset
+                // We set the system to output 75 dB (with 75/75 filter)
+                // The measured value tells us the actual output
+                val expectedSpl = 75.0f
+                
+                // Calibration offset calculation (corrected):
+                // Calibration Offset = expected - measured
+                // Example: Expected 75 dB, Measured 80 dB → Offset = -5 dB
+                // This -5 dB offset means system is 5 dB louder than expected
+                calibrationOffset = expectedSpl - measuredValue
+                
+                // Store the calibration offset
+                loudnessController.setCalibrationOffset(calibrationOffset)
+                
+                // Log for debugging
+                Timber.d("Calibration Step 2: Expected $expectedSpl dB, Measured $measuredValue dB")
+                Timber.d("Calibration offset = $expectedSpl - $measuredValue = $calibrationOffset dB")
+                
+                toast("Calibration complete! Offset: ${String.format("%+.1f", calibrationOffset)} dB")
+                
+                // Finish calibration
+                finishCalibration()
+            }
+        }
+    }
+    
+    private fun finishCalibration() {
+        isCalibrating = false
+        calibrationStep = 0
+        
+        // Stop pink noise
+        if (isPlayingNoise) {
+            stopPinkNoise()
+        }
+        
+        // Restore UI
+        startCalibrationButton.visibility = View.VISIBLE
+        calibrationProgressLayout.visibility = View.GONE
+        calibrationInputLayout.visibility = View.GONE
+        pinkNoiseButton.visibility = View.GONE
+        cancelCalibrationButton.visibility = View.GONE
+        resetCalibrationButton.visibility = View.VISIBLE
+        
+        // Re-enable sliders
+        realVolumeSlider.isEnabled = true
+        referenceSlider.isEnabled = true
+        
+        // Update calibration status
+        updateCalibrationStatus()
+        
+        // Restore previous settings
+        loadCurrentSettings()
+        updateDisplay()
+    }
+    
+    private fun cancelCalibration() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Cancel Calibration?")
+            .setMessage("Are you sure you want to cancel the calibration process?")
+            .setPositiveButton("Yes") { _, _ ->
+                isCalibrating = false
+                calibrationStep = 0
+                
+                if (isPlayingNoise) {
+                    stopPinkNoise()
+                }
+                
+                finishCalibration()
+                toast("Calibration cancelled")
+            }
+            .setNegativeButton("No", null)
+            .show()
+    }
+    
+    private fun resetCalibration() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("Reset Calibration?")
+            .setMessage("This will reset all calibration data to defaults.")
+            .setPositiveButton("Reset") { _, _ ->
+                // Reset all calibration values
+                loudnessController.setCalibrationOffset(0.0f)
+                calibrationOffset = 0.0f
+                maxDynamicSpl = MAX_VOLUME_DB
+                
+                // Reset in LoudnessController
+                loudnessController.setMaxSpl(MAX_VOLUME_DB)
+                
+                // Update slider range
+                realVolumeSlider.valueTo = MAX_VOLUME_DB
+                
+                updateCalibrationStatus()
+                updateDisplay()
+                toast("Calibration reset to defaults")
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
     
     override fun onDestroy() {
         super.onDestroy()
         // Cancel any pending auto-apply job
         autoApplyJob?.cancel()
+        // Stop pink noise if playing
+        if (isPlayingNoise) {
+            stopPinkNoise()
+        }
     }
     
     override fun onSupportNavigateUp(): Boolean {
-        onBackPressed()
+        finish()
         return true
+    }
+    
+    private fun saveProfile(slot: Int) {
+        val profileKey = "loudness_profile_$slot"
+        val profileData = mapOf(
+            "targetSpl" to targetSpl,
+            "referenceLevel" to referenceLevel,
+            "calibrationOffset" to calibrationOffset,
+            "maxSpl" to loudnessController.getMaxSpl()
+        )
+        
+        // Convert to JSON string for storage
+        val profileJson = profileData.entries.joinToString(",") { "${it.key}:${it.value}" }
+        prefsApp.preferences.edit().putString(profileKey, profileJson).apply()
+        
+        toast("Profile $slot saved")
+    }
+    
+    private fun loadProfile(slot: Int) {
+        val profileKey = "loudness_profile_$slot"
+        val profileJson = prefsApp.preferences.getString(profileKey, null)
+        
+        if (profileJson == null) {
+            toast("Profile $slot is empty")
+            return
+        }
+        
+        try {
+            // Parse the simple JSON format
+            val profileData = profileJson.split(",").associate {
+                val parts = it.split(":")
+                parts[0] to parts[1].toFloat()
+            }
+            
+            // Load values
+            targetSpl = profileData["targetSpl"] ?: DEFAULT_VOLUME_DB
+            referenceLevel = profileData["referenceLevel"] ?: DEFAULT_REFERENCE_PHON
+            calibrationOffset = profileData["calibrationOffset"] ?: 0.0f
+            
+            // Update UI - round values to match step size
+            realVolumeSlider.value = (targetSpl * 10).roundToInt() / 10f
+            referenceSlider.value = referenceLevel.roundToInt().toFloat().coerceIn(75.0f, 90.0f)
+            
+            // Update LoudnessController
+            loudnessController.setTargetSpl(targetSpl)
+            loudnessController.setReferenceLevel(referenceLevel)
+            loudnessController.setCalibrationOffset(calibrationOffset)
+            
+            // Update displays
+            updateCalibrationStatus()
+            updateDisplay()
+            
+            toast("Profile $slot loaded")
+        } catch (e: Exception) {
+            Timber.e(e, "Failed to load profile $slot")
+            toast("Failed to load profile $slot")
+        }
+    }
+    
+    private fun startPinkNoise() {
+        // Calculate amplitude based on calibration step
+        val amplitude = if (calibrationStep == 2 && maxSplMeasurement > 0) {
+            // Step 2: Reduce amplitude by the attenuation amount
+            val attenuation = maxSplMeasurement - targetSpl
+            val linearGain = 10.0f.pow(-attenuation / 20.0f)
+            Timber.d("Pink noise Step 2: attenuation=$attenuation dB, linearGain=$linearGain")
+            linearGain
+        } else {
+            // Step 1 or normal playback: Full amplitude
+            1.0f
+        }
+        
+        // Create pink noise generator
+        val sampleRate = 48000
+        val bufferSize = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_STEREO,
+            AudioFormat.ENCODING_PCM_FLOAT
+        )
+        
+        audioTrack = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build()
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setSampleRate(sampleRate)
+                    .setEncoding(AudioFormat.ENCODING_PCM_FLOAT)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                    .build()
+            )
+            .setBufferSizeInBytes(bufferSize * 4)
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+        
+        audioTrack?.play()
+        isPlayingNoise = true
+        
+        // Update button
+        pinkNoiseButton.text = "Stop Pink Noise"
+        // Note: pause icon not available in drawables
+        
+        // Store amplitude for use in coroutine
+        val noiseAmplitude = amplitude
+        
+        // Generate pink noise in coroutine
+        noiseGeneratorJob = CoroutineScope(Dispatchers.IO).launch {
+            val buffer = FloatArray(bufferSize / 2) // Stereo, so half for each channel
+            val pinkNoise = PinkNoiseGenerator()
+            
+            while (isPlayingNoise) {
+                // Generate pink noise with calculated amplitude
+                for (i in buffer.indices step 2) {
+                    val sample = pinkNoise.getNextValue() * noiseAmplitude
+                    buffer[i] = sample      // Left channel
+                    buffer[i + 1] = sample  // Right channel
+                }
+                
+                audioTrack?.write(buffer, 0, buffer.size, AudioTrack.WRITE_BLOCKING)
+            }
+        }
+        
+        val dbLevel = if (amplitude < 1.0f) {
+            String.format("%.1f", 20 * log10(amplitude))
+        } else {
+            "0"
+        }
+        toast("Playing pink noise at $dbLevel dB")
+    }
+    
+    private fun stopPinkNoise() {
+        isPlayingNoise = false
+        noiseGeneratorJob?.cancel()
+        audioTrack?.stop()
+        audioTrack?.release()
+        audioTrack = null
+        
+        // Update button
+        pinkNoiseButton.text = "Play Pink Noise"
+        // Note: using play arrow icon
+        
+        toast("Pink noise stopped")
+    }
+    
+    // Pink noise generator using Voss-McCartney algorithm
+    private class PinkNoiseGenerator {
+        private val maxKey = 0x1f // 5 bits
+        private val range = 128
+        private var key = 0
+        private val whiteValues = IntArray(6)
+        private var runningSum = 0
+        
+        init {
+            // Initialize with random values
+            for (i in whiteValues.indices) {
+                whiteValues[i] = (Math.random() * (range / 6)).toInt()
+                runningSum += whiteValues[i]
+            }
+        }
+        
+        fun getNextValue(): Float {
+            val lastKey = key
+            key++
+            
+            if (key > maxKey) key = 0
+            
+            // XOR difference between old and new keys
+            val diff = lastKey xor key
+            
+            // Update white values based on bit differences
+            var bit = 0
+            while (bit < 5) {
+                if ((diff and (1 shl bit)) != 0) {
+                    runningSum -= whiteValues[bit]
+                    whiteValues[bit] = (Math.random() * (range / 6)).toInt()
+                    runningSum += whiteValues[bit]
+                }
+                bit++
+            }
+            
+            // Add white noise
+            runningSum -= whiteValues[5]
+            whiteValues[5] = (Math.random() * (range / 6)).toInt()
+            runningSum += whiteValues[5]
+            
+            // Convert to -1.0 to 1.0 range
+            return (runningSum.toFloat() / range) * 2.0f - 1.0f
+        }
     }
     
 }

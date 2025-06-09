@@ -149,7 +149,7 @@
                     android:valueFrom="75"
                     android:valueTo="90"
                     android:value="80"
-                    android:stepSize="5"
+                    android:stepSize="1"
                     app:labelBehavior="gone" />
 
                 <com.google.android.material.textview.MaterialTextView
@@ -165,98 +165,6 @@
 
             </LinearLayout>
 
-            <!-- Calculated Values Card -->
-            <com.google.android.material.card.MaterialCardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                app:cardBackgroundColor="?attr/colorSurfaceVariant"
-                app:cardCornerRadius="12dp"
-                app:cardElevation="0dp"
-                android:layout_marginBottom="24dp">
-
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
-
-                    <!-- Target Phon -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:layout_marginBottom="8dp">
-
-                        <com.google.android.material.textview.MaterialTextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="Target Phon"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-
-                        <com.google.android.material.textview.MaterialTextView
-                            android:id="@+id/target_phon_text"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="70.0 phon"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:textColor="?attr/colorOnSurface" />
-
-                    </LinearLayout>
-
-                    <!-- Offset -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:layout_marginBottom="8dp">
-
-                        <com.google.android.material.textview.MaterialTextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="Offset"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-
-                        <com.google.android.material.textview.MaterialTextView
-                            android:id="@+id/offset_text"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="+0.0 dB"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:textColor="?attr/colorOnSurface" />
-
-                    </LinearLayout>
-
-                    <!-- Compensation -->
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal">
-
-                        <com.google.android.material.textview.MaterialTextView
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="Compensation"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-
-                        <com.google.android.material.textview.MaterialTextView
-                            android:id="@+id/preamp_text"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Active"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:textColor="?attr/colorOnSurface" />
-
-                    </LinearLayout>
-
-                </LinearLayout>
-
-            </com.google.android.material.card.MaterialCardView>
 
             <!-- System Calibration Card -->
             <com.google.android.material.card.MaterialCardView
@@ -284,7 +192,7 @@
                     <com.google.android.material.textview.MaterialTextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Calibrate your system for accurate SPL readings"
+                        android:text="2-step calibration for accurate SPL readings"
                         android:textAppearance="?attr/textAppearanceBodyMedium"
                         android:textColor="?attr/colorOnSurfaceVariant"
                         android:layout_marginBottom="16dp" />
@@ -313,89 +221,211 @@
 
                     </LinearLayout>
 
-                    <!-- Calibration Input -->
+                    <!-- Step Progress -->
+                    <LinearLayout
+                        android:id="@+id/calibration_progress_layout"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginBottom="16dp"
+                        android:visibility="gone">
+
+                        <com.google.android.material.progressindicator.LinearProgressIndicator
+                            android:id="@+id/calibration_progress"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginBottom="8dp"
+                            app:trackThickness="8dp" />
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/calibration_step_text"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Step 1 of 2: Max SPL Measurement"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"
+                            android:textColor="?attr/colorPrimary" />
+
+                    </LinearLayout>
+
+                    <!-- Main Calibration Button -->
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/start_calibration_button"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Start Calibration"
+                        app:icon="@drawable/ic_baseline_equalizer_24dp"
+                        android:layout_marginBottom="16dp" />
+
+                    <!-- Calibration Input (shown during calibration) -->
+                    <LinearLayout
+                        android:id="@+id/calibration_input_layout"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:visibility="gone"
+                        android:layout_marginBottom="16dp">
+
+                        <com.google.android.material.textview.MaterialTextView
+                            android:id="@+id/calibration_instruction_text"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="Measure the SPL with your meter:"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"
+                            android:textColor="?attr/colorOnSurface"
+                            android:layout_marginBottom="8dp" />
+
+                        <LinearLayout
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:orientation="horizontal"
+                            android:gravity="center">
+
+                            <com.google.android.material.textfield.TextInputLayout
+                                android:id="@+id/measured_spl_input_layout"
+                                style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+                                android:layout_width="120dp"
+                                android:layout_height="wrap_content"
+                                android:layout_marginEnd="4dp"
+                                app:suffixText="dB">
+
+                                <com.google.android.material.textfield.TextInputEditText
+                                    android:id="@+id/measured_spl_input"
+                                    android:layout_width="match_parent"
+                                    android:layout_height="wrap_content"
+                                    android:inputType="numberDecimal"
+                                    android:textAlignment="center" />
+
+                            </com.google.android.material.textfield.TextInputLayout>
+
+                            <com.google.android.material.button.MaterialButton
+                                android:id="@+id/save_measurement_button"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="Save"
+                                android:layout_marginStart="8dp" />
+
+                        </LinearLayout>
+
+                    </LinearLayout>
+
+                    <!-- Pink Noise Control (shown during calibration) -->
+                    <com.google.android.material.button.MaterialButton
+                        android:id="@+id/pink_noise_button"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="Play Pink Noise (0 dB)"
+                        app:icon="@drawable/ic_baseline_play_arrow_24dp"
+                        android:visibility="gone"
+                        android:layout_marginBottom="16dp" />
+
+                    <!-- Additional Controls -->
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
                         android:orientation="horizontal"
-                        android:gravity="center_vertical"
-                        android:layout_marginBottom="16dp">
+                        android:layout_marginBottom="8dp">
 
-                        <com.google.android.material.textview.MaterialTextView
-                            android:layout_width="wrap_content"
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/reset_calibration_button"
+                            style="@style/Widget.Material3.Button.OutlinedButton"
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:text="Measured SPL at 80dB setting:"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:layout_weight="1"
+                            android:text="Reset"
+                            app:icon="@drawable/ic_baseline_refresh_24dp"
                             android:layout_marginEnd="8dp" />
 
-                        <com.google.android.material.textfield.TextInputLayout
-                            android:id="@+id/measured_spl_input_layout"
-                            style="@style/Widget.Material3.TextInputLayout.OutlinedBox.Dense"
-                            android:layout_width="80dp"
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/cancel_calibration_button"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginEnd="4dp">
-
-                            <com.google.android.material.textfield.TextInputEditText
-                                android:id="@+id/measured_spl_input"
-                                android:layout_width="match_parent"
-                                android:layout_height="wrap_content"
-                                android:inputType="numberDecimal"
-                                android:hint="80.0"
-                                android:textAlignment="center" />
-
-                        </com.google.android.material.textfield.TextInputLayout>
-
-                        <com.google.android.material.textview.MaterialTextView
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="dB"
-                            android:textAppearance="?attr/textAppearanceBodyMedium"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
+                            android:layout_weight="1"
+                            android:text="Cancel"
+                            android:visibility="gone" />
 
                     </LinearLayout>
 
-                    <!-- Calibrate Button -->
-                    <com.google.android.material.button.MaterialButton
-                        android:id="@+id/calibrate_button"
+                    <!-- Profile Management -->
+                    <com.google.android.material.divider.MaterialDivider
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="Calibrate"
-                        app:icon="@drawable/ic_baseline_equalizer_24dp"
-                        android:layout_marginBottom="8dp" />
+                        android:layout_marginVertical="16dp" />
 
                     <com.google.android.material.textview.MaterialTextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Instructions:\n1. Set Real Volume slider to 80dB\n2. Measure actual SPL with your meter\n3. Enter the measured value above\n4. Click Calibrate"
-                        android:textAppearance="?attr/textAppearanceCaption"
-                        android:textColor="?attr/colorOnSurfaceVariant" />
-
-                    <!-- Current Offset Display -->
+                        android:text="Profile Management"
+                        android:textAppearance="?attr/textAppearanceBodyMedium"
+                        android:textColor="?attr/colorOnSurface"
+                        android:layout_marginBottom="8dp" />
+                    
                     <LinearLayout
-                        android:id="@+id/offset_display_layout"
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:orientation="horizontal"
-                        android:layout_marginTop="8dp"
+                        android:orientation="horizontal">
+                        
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/save_profile_button"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Save"
+                            app:icon="@drawable/ic_twotone_save_24dp"
+                            android:layout_marginEnd="8dp" />
+                            
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/load_profile_button"
+                            style="@style/Widget.Material3.Button.TonalButton"
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:text="Load"
+                            app:icon="@drawable/ic_twotone_folder_special_24dp" />
+                    </LinearLayout>
+
+                    <!-- Hidden buttons for compatibility -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
                         android:visibility="gone">
-
-                        <com.google.android.material.textview.MaterialTextView
+                        
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/prepare_max_spl_button"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Calibration offset: "
-                            android:textAppearance="?attr/textAppearanceCaption"
-                            android:textColor="?attr/colorOnSurfaceVariant" />
-
-                        <com.google.android.material.textview.MaterialTextView
-                            android:id="@+id/calibration_offset_text"
+                            android:layout_height="wrap_content" />
+                            
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/save_max_spl_button"
                             android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="0.0 dB"
-                            android:textAppearance="?attr/textAppearanceCaption"
-                            android:textColor="?attr/colorPrimary"
-                            android:textStyle="bold" />
+                            android:layout_height="wrap_content" />
 
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/prepare_80db_button"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                            
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/save_80db_button"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/prepare_75db_button"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+                            
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/save_75db_button"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/calibrate_button"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content" />
                     </LinearLayout>
 
                 </LinearLayout>
