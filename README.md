@@ -6,21 +6,46 @@ A fork of [ThePBone/RootlessJamesDSP](https://github.com/ThePBone/RootlessJamesD
 
 ### Loudness Controller
 - Equal-loudness compensation based on ISO 226:2003 standard
-- Real-time SPL calculation with safety level indicators
-- Dual slider control: Real Volume (40-90 dB) and Reference (75-90 dB)
-- Pre-calculated EEL scripts for precise loudness compensation (6,816 files bundled)
+- Real-time loudness calculation with safety level indicators
+- Triple slider control: Target Phon (40-125), Reference Phon (75-90), and RMS Offset (0-14 dB)
+- Dynamic EEL script generation for precise loudness compensation
+- Pre-computed FIR filters for all phon combinations
 - Safety listening time calculation using NIOSH criteria
 
 ### Interface
-- APO Loudness-style black display card with color-coded SPL indicators
-- Safety levels: Green (≤65 dB), Yellow (65-73 dB), Light Red (73-80 dB), Pink (80-85 dB), Red (≥85 dB)
-- Technical parameters display (Target, Reference, Offset, Preamp)
+- APO Loudness-style black display card with color-coded phon indicators
+- Safety levels: Green (≤65 phon), Yellow (65-73 phon), Light Red (73-80 phon), Pink (80-85 phon), Red (≥85 phon)
+- Technical parameters display with FIR compensation and calibration status
+- Real-time calculation details showing actual phon after RMS offset
 
 ### Technical Implementation
-- Uses pre-bundled FIR filters and EEL scripts for all reference/target combinations
-- Automatic offset calculation to match desired SPL levels
-- Extended preamp range down to -40 dB
-- Reference slider dynamically adjusts based on real volume
+- Adaptive EEL script generation based on current settings (no pre-bundled scripts needed)
+- FIR filters selected dynamically with proper reference phon rounding (75/80/85/90)
+- RMS offset compensation for realistic music loudness perception
+- Auto reference mode that adjusts reference phon based on target phon
+- Two-step calibration system for accurate SPL measurement
+- FIR compensation toggle for advanced users
+
+### What's New in This Fork (2025-01-09)
+- **Phon-based terminology**: Replaced SPL with proper phon units throughout
+- **RMS Offset**: Compensates for the difference between pink noise (0 dB) and actual music levels
+- **Improved filter selection**: Reference phon values properly round to available filters
+- **Better stability**: Fixed crashes and improved auto reference mode behavior
+- **No more pre-bundled EEL files**: Dynamic generation reduces app size significantly
+
+For detailed documentation, see [LOUDNESS_CONTROL_SYSTEM_DOCUMENTATION.md](LOUDNESS_CONTROL_SYSTEM_DOCUMENTATION.md)
+
+### Screenshots
+
+<p align="center">
+   <img alt="Main interface showing Loudness Controller integration" width="250" src="img/screenshot_loudness_main.png">
+   <img alt="Loudness Controller interface" width="250" src="img/screenshot7.png">
+</p>
+
+The Loudness Controller is seamlessly integrated into JamesDSP:
+- The main screen shows the active FIR filter (e.g., "75.1-90.0_filter") in the Convolver section
+- Access the Loudness Controller from the bottom menu
+- The system automatically manages Convolver and Liveprog settings
 
 ---
 
@@ -64,8 +89,8 @@ This app uses <a href="https://github.com/james34602/JamesDSPManager">libjamesds
 </p>
 
 <p align="center">
-   <img alt="Screenshot" width="250" src="img/screenshot1.png">
-   <img alt="Screenshot" width="250" src="img/screenshot7.png">
+   <img alt="Original JamesDSP interface" width="250" src="img/screenshot1.png">
+   <img alt="Additional features" width="250" src="img/screenshot2.png">
 </p>
 
 
