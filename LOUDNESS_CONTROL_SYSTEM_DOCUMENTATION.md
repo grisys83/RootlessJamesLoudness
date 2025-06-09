@@ -36,16 +36,22 @@ The system uses pre-computed FIR filters that:
 - Are normalized at 1 kHz (0 dB gain at 1 kHz)
 - Compensate for the ear's frequency-dependent sensitivity
 
-### 3. Reference Level (Phons)
+### 3. Reference Phon
 The reference level (75-90 phons) determines which equal-loudness contour to use. Higher reference levels are for louder listening environments.
 
-### 4. Target SPL (Sound Pressure Level)
-The actual listening level in dB SPL that the user wants to achieve.
+### 4. Target Phon
+The desired loudness level in phons that the user wants to achieve. This is what you set with the main slider.
 
-### 5. Calibration Offset
+### 5. RMS Offset
+The difference between 0dB pink noise reference and actual music RMS levels (typically 6-14 dB). This allows for more accurate loudness perception with real music content.
+
+### 6. Actual Phon
+The effective loudness level after applying RMS offset: `Actual Phon = Target Phon - RMS Offset`
+
+### 7. Calibration Offset
 The difference between measured and expected SPL values, used to compensate for system-specific characteristics.
 
-### 6. FIR Compensation
+### 8. FIR Compensation
 Values that compensate for the nonlinear gain introduced by FIR filters after normalization at 1 kHz. This is NOT related to equal-loudness curves but rather to the filter's inherent gain characteristics.
 
 ## System Architecture
@@ -64,8 +70,9 @@ Values that compensate for the nonlinear gain introduced by FIR filters after no
 
 3. **FIR Filter Files**
    - Pre-computed WAV files in `LoudnessFilters/` directory
-   - Named format: `{targetSPL}-{referencePhon}_filter.wav`
-   - Example: `60-75_filter.wav`
+   - Named format: `{actualPhon}-{referencePhon}_filter.wav`
+   - Example: `60.0-75.0_filter.wav` (always with 1 decimal place)
+   - Reference phons are rounded to available values: 75, 80, 85, 90
 
 4. **EEL Script**
    - `loudnessControl.eel` - Applies gain adjustments
@@ -91,8 +98,8 @@ User Input (Sliders) → LoudnessController → DSP Configuration
 **Purpose**: Determine the maximum SPL your system can produce
 
 **Settings**:
-- Target SPL: 90 dB
-- Reference Level: 90 phons
+- Target Phon: 90
+- Reference Phon: 90
 - FIR Filter: `90-90_filter.wav`
 - EEL Gain: Only FIR compensation applied
 
@@ -202,22 +209,25 @@ totalEelGain = -attenuation + firCompensation + calibrationOffset
 ```
 
 Where:
-- **attenuation** = maxSpl - targetSpl (always positive)
+- **attenuation** = maxSpl - targetPhon (always positive)
 - **firCompensation** = FIR filter gain correction (always negative)
 - **calibrationOffset** = Expected - Measured (negative if louder, positive if quieter)
+- **actualPhon** = targetPhon - rmsOffset (used for filter selection)
 
 **Example calculation**:
-- targetSpl: 60 dB
+- targetPhon: 70
+- rmsOffset: 10 dB
+- actualPhon: 70 - 10 = 60
 - maxSpl: 89.8 dB
-- referenceLevel: 80 phons
+- referencePhon: 80
 - calibrationOffset: -5 dB (system is louder than expected)
-- firCompensation: -18.95 dB (from table)
-- attenuation = 89.8 - 60 = 29.8 dB
-- totalEelGain = -29.8 + (-18.95) + (-5) = -53.75 dB
+- firCompensation: -18.95 dB (from table for actualPhon=60, referencePhon=80)
+- attenuation = 89.8 - 70 = 19.8 dB
+- totalEelGain = -19.8 + (-18.95) + (-5) = -43.75 dB
 
 ### 4. Required Attenuation
 ```
-attenuation = maxDynamicSpl - targetSpl
+attenuation = maxDynamicSpl - targetPhon
 ```
 
 This is how much volume reduction is needed from maximum:
@@ -243,18 +253,21 @@ Since Android system volume stays at maximum, ALL volume control happens through
 ### Complete Calculation Example
 
 Given:
-- User sets: targetSpl = 60 dB, referenceLevel = 80 phons
+- User sets: targetPhon = 70, referencePhon = 80, rmsOffset = 10 dB
 - From calibration: maxSpl = 89.8 dB, calibrationOffset = -5 dB (system louder than expected)
 
 Calculation flow:
-1. `attenuation = 89.8 - 60 = 29.8 dB`
-2. `firCompensation = getFirCompensation(60, 80) = -18.95 dB`
-3. `totalEelGain = -29.8 + (-18.95) + (-5) = -53.75 dB`
+1. `actualPhon = 70 - 10 = 60` (for filter selection)
+2. `attenuation = 89.8 - 70 = 19.8 dB`
+3. `firCompensation = getFirCompensation(60, 80) = -18.95 dB`
+4. `totalEelGain = -19.8 + (-18.95) + (-5) = -43.75 dB`
 
 Display output:
 ```
-Target SPL: 60.0 dB
-Reference: 80 phon
+Target Phon: 70.0
+RMS Offset: -10 dB
+Actual Phon: 60.0 (70.0 - 10)
+Reference Phon: 80
 Calibration: System is 5.0 dB louder than expected
 Calibration Offset = -5.0 dB
 FIR Compensation (nonlinear gain correction) = -18.95 dB
@@ -262,22 +275,22 @@ FIR Compensation (nonlinear gain correction) = -18.95 dB
 Loudness Compensation = FIR Comp + Calib Offset
 Loudness Compensation = (-18.95) + (-5.0) = -23.95 dB
 
-Real Vol = Target SPL = 60.0 dB
-Attenuation Required = Max SPL - Target SPL
-Attenuation Required = 89.8 - 60.0 = 29.8 dB
+Real Vol = Target Phon = 70.0
+Attenuation Required = Max SPL - Target Phon
+Attenuation Required = 89.8 - 70.0 = 19.8 dB
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Final EEL Gain Calculation:
 EEL Gain = -Attenuation + FIR Comp + Calib Offset
-EEL Gain = -(29.8) + (-18.95) + (-5.0)
-EEL Gain = -29.8 + -23.95
-EEL Gain = -53.75 dB
+EEL Gain = -(19.8) + (-18.95) + (-5.0)
+EEL Gain = -19.8 + -23.95
+EEL Gain = -43.75 dB
 
 System volume stays at MAX
 All control via negative EEL gain
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Filter: 60-80_filter.wav
+Filter: 60.0-80.0_filter.wav
 ```
 
 ## Common Confusions and Clarifications
