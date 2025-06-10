@@ -20,6 +20,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withContext
 
 /**
  * LoudnessController implements APO Loudness-like functionality for Android
@@ -34,9 +37,10 @@ import kotlinx.coroutines.launch
  */
 class LoudnessController(private val context: Context) : KoinComponent {
     
-    private val audioManager = context.getSystemService<AudioManager>()!!
+    private val appContext = context.applicationContext
+    private val audioManager = appContext.getSystemService<AudioManager>()!!
     private val preferences: Preferences.App by inject()
-    private val safeVolumeManager = SafeVolumeManager(context)
+    private val safeVolumeManager = SafeVolumeManager(appContext)
     
     // Constants for loudness calculations
     companion object {
@@ -327,17 +331,17 @@ class LoudnessController(private val context: Context) : KoinComponent {
      * Generate EEL script content for the calculated gain
      */
     private fun generateEelScript(totalGainDb: Float): String {
-        return """
-desc: Calibrated Loudness Gain
-
-@init
-DB_2_LOG = 0.11512925464970228420089957273422;
-gainLin = exp($totalGainDb * DB_2_LOG);
-
-@sample
-spl0 *= gainLin;
-spl1 *= gainLin;
-""".trimIndent()
+        // Reuse StringBuilder for better memory efficiency
+        scriptBuilder.clear()
+        scriptBuilder.append("desc: Calibrated Loudness Gain\n\n")
+        scriptBuilder.append("@init\n")
+        scriptBuilder.append("DB_2_LOG = 0.11512925464970228420089957273422;\n")
+        scriptBuilder.append("gainLin = exp(").append(totalGainDb).append(" * DB_2_LOG);\n\n")
+        scriptBuilder.append("@sample\n")
+        scriptBuilder.append("spl0 *= gainLin;\n")
+        scriptBuilder.append("spl1 *= gainLin;")
+        
+        return scriptBuilder.toString()
     }
     
     /**
@@ -345,12 +349,40 @@ spl1 *= gainLin;
      */
     private fun saveEelFile(content: String) {
         try {
-            val file = File(context.getExternalFilesDir(null), "Liveprog/loudnessCalibrated.eel")
+            val file = File(appContext.getExternalFilesDir(null), "Liveprog/loudnessCalibrated.eel")
             file.parentFile?.mkdirs()
             file.writeText(content)
             Timber.d("Saved EEL file: ${file.absolutePath}")
         } catch (e: Exception) {
             Timber.e(e, "Failed to save EEL file")
+        }
+    }
+    
+    /**
+     * Save EEL file atomically to prevent corruption
+     */
+    private suspend fun saveEelFileAtomic(content: String) {
+        withContext(Dispatchers.IO) {
+            try {
+                val targetFile = File(appContext.getExternalFilesDir(null), "Liveprog/loudnessCalibrated.eel")
+                targetFile.parentFile?.mkdirs()
+                
+                // Write to temporary file first
+                val tempFile = File(targetFile.parent, "${targetFile.name}.tmp")
+                tempFile.writeText(content)
+                
+                // Atomically rename temp file to target file
+                if (tempFile.renameTo(targetFile)) {
+                    Timber.d("Atomically saved EEL file: ${targetFile.absolutePath}")
+                } else {
+                    // Fallback to regular write if rename fails
+                    targetFile.writeText(content)
+                    tempFile.delete()
+                    Timber.d("Saved EEL file (fallback): ${targetFile.absolutePath}")
+                }
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to save EEL file atomically")
+            }
         }
     }
     
@@ -391,13 +423,13 @@ spl1 *= gainLin;
         Timber.d("Updating loudness configuration...")
         
         // Ensure DSP master switch is on
-        val masterEnabled = preferences.preferences.getBoolean(context.getString(R.string.key_powered_on), false)
+        val masterEnabled = preferences.preferences.getBoolean(appContext.getString(R.string.key_powered_on), false)
         if (!masterEnabled) {
             Timber.d("DSP master switch is off, turning it on")
             preferences.preferences.edit()
-                .putBoolean(context.getString(R.string.key_powered_on), true)
+                .putBoolean(appContext.getString(R.string.key_powered_on), true)
                 .apply()
-            context.sendLocalBroadcast(android.content.Intent(Constants.ACTION_PREFERENCES_UPDATED))
+            appContext.sendLocalBroadcast(android.content.Intent(Constants.ACTION_PREFERENCES_UPDATED))
         }
         
         // Calculate actual phon (target phon - RMS offset)
@@ -423,6 +455,7 @@ spl1 *= gainLin;
         // Formula: -attenuation + firCompensation + calibrationOffset
         val totalEelGain = -attenuation + firCompensation + calibrationOffset
         
+        
         Timber.d("=== Loudness Update Debug ===")
         Timber.d("targetPhon=$targetPhon, actualPhon=$actualPhon, rmsOffset=$rmsOffset, maxSpl=$maxSpl")
         Timber.d("attenuation = $maxSpl - $targetPhon = $attenuation")
@@ -430,25 +463,41 @@ spl1 *= gainLin;
         Timber.d("totalEelGain = -$attenuation + $firCompensation + $calibrationOffset = $totalEelGain")
         Timber.d("==========================")
         
-        // Generate EEL script
-        val eelScript = generateEelScript(totalEelGain)
+        // Cancel any pending update
+        pendingUpdateJob?.cancel()
         
-        // Log the actual EEL script content for debugging
-        Timber.d("=== EEL Script Content ===")
-        Timber.d(eelScript)
-        Timber.d("========================")
-        
-        // Save EEL file
-        saveEelFile(eelScript)
-        
-        // Update DSP to use the new EEL script
-        updateLoudnessConfig("Liveprog: loudnessCalibrated.eel")
+        // Debounce: wait 50ms before applying changes
+        pendingUpdateJob = updateScope.launch {
+            delay(50) // 50ms debounce
+            
+            // Generate EEL script
+            val eelScript = generateEelScript(totalEelGain)
+            
+            // Log the actual EEL script content for debugging
+            Timber.d("=== EEL Script Content ===")
+            Timber.d(eelScript)
+            Timber.d("========================")
+            
+            // Save EEL file with atomic write
+            saveEelFileAtomic(eelScript)
+            
+            // Update last gain value
+            lastTotalGain = totalEelGain
+            
+            // Update DSP to use the new EEL script on main thread
+            withContext(Dispatchers.Main) {
+                updateLoudnessConfig("Liveprog: loudnessCalibrated.eel")
+            }
+        }
     }
     
     /**
      * Disable loudness processing
      */
     private fun disableLoudness() {
+        // Cancel any pending updates
+        pendingUpdateJob?.cancel()
+        
         // Save a bypass EEL script
         val bypassScript = """
 desc: Loudness Bypass
@@ -461,8 +510,15 @@ spl0 *= gainLin;
 spl1 *= gainLin;
 """.trimIndent()
         
-        saveEelFile(bypassScript)
-        updateLoudnessConfig("Liveprog: loudnessCalibrated.eel")
+        // Use async file write
+        pendingUpdateJob = updateScope.launch {
+            saveEelFileAtomic(bypassScript)
+            
+            // Update DSP on main thread
+            withContext(Dispatchers.Main) {
+                updateLoudnessConfig("Liveprog: loudnessCalibrated.eel")
+            }
+        }
     }
     
     /**
@@ -477,13 +533,24 @@ spl1 *= gainLin;
     
     private var isMuting = false
     private var savedVolume: Int? = null
+    private var muteJob: Job? = null
+    
+    // Optimization: Debouncing and caching
+    private var lastTotalGain: Float? = null
+    private var pendingUpdateJob: Job? = null
+    private val updateScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    
+    // Memory buffer optimization
+    private val scriptBuilder = StringBuilder(256)
     
     /**
      * Mute audio temporarily before DSP updates
      */
     private fun muteBeforeDspUpdate(action: () -> Unit) {
-        CoroutineScope(Dispatchers.Main).launch {
-            val audioManager = context.getSystemService<AudioManager>()!!
+        // Cancel any existing mute job
+        muteJob?.cancel()
+        muteJob = CoroutineScope(Dispatchers.Main).launch {
+            val audioManager = appContext.getSystemService<AudioManager>()!!
             
             // Prevent nested muting
             if (isMuting) {
@@ -559,18 +626,18 @@ spl1 *= gainLin;
         val filterPath = "Convolver/$filterFile"
         
         // Enable Convolver with the selected FIR filter
-        val convolverPrefs = context.getSharedPreferences(Constants.PREF_CONVOLVER, Context.MODE_PRIVATE)
+        val convolverPrefs = appContext.getSharedPreferences(Constants.PREF_CONVOLVER, Context.MODE_PRIVATE)
         convolverPrefs.edit().apply {
-            putBoolean(context.getString(R.string.key_convolver_enable), true)
-            putString(context.getString(R.string.key_convolver_file), filterPath)
+            putBoolean(appContext.getString(R.string.key_convolver_enable), true)
+            putString(appContext.getString(R.string.key_convolver_file), filterPath)
             apply()
         }
         
         // Enable Liveprog with the calibrated EEL file
-        val liveprogPrefs = context.getSharedPreferences(Constants.PREF_LIVEPROG, Context.MODE_PRIVATE)
+        val liveprogPrefs = appContext.getSharedPreferences(Constants.PREF_LIVEPROG, Context.MODE_PRIVATE)
         liveprogPrefs.edit().apply {
-            putBoolean(context.getString(R.string.key_liveprog_enable), true)
-            putString(context.getString(R.string.key_liveprog_file), "Liveprog/loudnessCalibrated.eel")
+            putBoolean(appContext.getString(R.string.key_liveprog_enable), true)
+            putString(appContext.getString(R.string.key_liveprog_file), "Liveprog/loudnessCalibrated.eel")
             apply()
         }
         
@@ -578,13 +645,13 @@ spl1 *= gainLin;
         Timber.d("Loudness config update: FIR=$filterPath, EEL=loudnessCalibrated.eel, config=$config")
         
         // Send broadcast to reload DSP settings for both effects
-        context.sendLocalBroadcast(android.content.Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+        appContext.sendLocalBroadcast(android.content.Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
             putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER, Constants.PREF_LIVEPROG))
         })
         
         // Send a custom broadcast to notify UI components to refresh
         // (CONFIGURATION_CHANGED is system-only and causes SecurityException)
-        context.sendLocalBroadcast(android.content.Intent("me.timschneeberger.rootlessjamesdsp.LOUDNESS_CONFIG_UPDATED"))
+        appContext.sendLocalBroadcast(android.content.Intent("me.timschneeberger.rootlessjamesdsp.LOUDNESS_CONFIG_UPDATED"))
     }
     
     /**
@@ -592,7 +659,7 @@ spl1 *= gainLin;
      */
     private fun getOutputGain(): Float {
         return preferences.preferences.getFloat(
-            context.getString(R.string.key_output_postgain), 
+            appContext.getString(R.string.key_output_postgain), 
             0.0f
         )
     }
@@ -602,7 +669,7 @@ spl1 *= gainLin;
      */
     private fun setOutputGain(gain: Float) {
         preferences.preferences.edit()
-            .putFloat(context.getString(R.string.key_output_postgain), gain)
+            .putFloat(appContext.getString(R.string.key_output_postgain), gain)
             .apply()
     }
     
@@ -652,5 +719,22 @@ spl1 *= gainLin;
         if (maxSpl.isNaN() || maxSpl.isInfinite()) {
             maxSpl = 125.0f
         }
+    }
+    
+    /**
+     * Clean up resources when the controller is no longer needed
+     */
+    fun destroy() {
+        // Cancel any pending updates
+        pendingUpdateJob?.cancel()
+        muteJob?.cancel()
+        
+        // Cancel the update scope
+        updateScope.cancel()
+        
+        // Clear references
+        lastTotalGain = null
+        
+        Timber.d("LoudnessController destroyed")
     }
 }

@@ -28,6 +28,7 @@ import androidx.lifecycle.Observer
 import androidx.lifecycle.asLiveData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import me.timschneeberger.rootlessjamesdsp.BuildConfig
 import me.timschneeberger.rootlessjamesdsp.R
 import me.timschneeberger.rootlessjamesdsp.flavor.CrashlyticsImpl
@@ -231,37 +232,49 @@ class RootlessAudioProcessorService : BaseAudioProcessorService() {
     override fun onDestroy() {
         isServiceDisposing = true
 
-        // Stop recording and release engine
-        stopRecording()
-        engine.close()
+        try {
+            // Stop recording and release engine
+            stopRecording()
+            engine.close()
 
-        // Stop foreground service
-        stopForeground(STOP_FOREGROUND_REMOVE)
+            // Stop foreground service
+            stopForeground(STOP_FOREGROUND_REMOVE)
 
-        // Notify app about service termination
-        sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_STOPPED))
+            // Notify app about service termination
+            sendLocalBroadcast(Intent(Constants.ACTION_SERVICE_STOPPED))
 
-        // Unregister database observer
-        blockedApps.removeObserver(blockedAppObserver)
+            // Unregister database observer
+            blockedApps.removeObserver(blockedAppObserver)
 
-        // Unregister receivers and release resources
-        unregisterLocalReceiver(broadcastReceiver)
-        mediaProjection?.unregisterCallback(projectionCallback)
-        mediaProjection = null
+            // Unregister receivers and release resources
+            try {
+                unregisterLocalReceiver(broadcastReceiver)
+            } catch (e: Exception) {
+                Timber.e(e, "Failed to unregister broadcast receiver")
+            }
+            
+            mediaProjection?.unregisterCallback(projectionCallback)
+            mediaProjection = null
 
-        sessionManager.sessionPolicyDatabase.unregisterOnRestrictedSessionChangeListener(onSessionPolicyChangeListener)
-        sessionManager.sessionDatabase.unregisterOnSessionChangeListener(onSessionChangeListener)
-        sessionManager.destroy()
+            sessionManager.sessionPolicyDatabase.unregisterOnRestrictedSessionChangeListener(onSessionPolicyChangeListener)
+            sessionManager.sessionDatabase.unregisterOnSessionChangeListener(onSessionChangeListener)
+            sessionManager.destroy()
 
-        preferences.unregisterOnSharedPreferenceChangeListener(preferencesListener)
-        notificationManager.cancel(Notifications.ID_SERVICE_STATUS)
-        
-        // Stop config file watcher
-        configFileWatcher?.stopWatching()
-        configFileWatcher = null
-
-        stopSelf()
-        super.onDestroy()
+            preferences.unregisterOnSharedPreferenceChangeListener(preferencesListener)
+            notificationManager.cancel(Notifications.ID_SERVICE_STATUS)
+            
+            // Stop config file watcher
+            configFileWatcher?.stopWatching()
+            configFileWatcher = null
+            
+            // Cancel coroutine scope
+            applicationScope.cancel()
+        } catch (e: Exception) {
+            Timber.e(e, "Error during service cleanup")
+        } finally {
+            stopSelf()
+            super.onDestroy()
+        }
     }
 
     // Preferences listener

@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
 import android.os.FileObserver
+import android.os.Handler
+import android.os.Looper
 import me.timschneeberger.rootlessjamesdsp.R
 import me.timschneeberger.rootlessjamesdsp.utils.extensions.ContextExtensions.sendLocalBroadcast
 import me.timschneeberger.rootlessjamesdsp.utils.extensions.ContextExtensions.toast
@@ -17,7 +19,9 @@ import java.io.File
  * This provides an Equalizer APO-like experience for power users while maintaining compatibility
  * with the existing SharedPreferences-based system.
  */
-class ConfigFileWatcher(private val context: Context) : KoinComponent {
+class ConfigFileWatcher(context: Context) : KoinComponent {
+    
+    private val appContext = context.applicationContext
     
     companion object {
         const val CONFIG_FILENAME = "JamesDSP.conf"
@@ -27,25 +31,27 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         private const val OBSERVER_MASK = FileObserver.MODIFY or FileObserver.MOVED_TO or FileObserver.CREATE
     }
     
-    private val configDir = File(context.getExternalFilesDir(null), CONFIG_DIR)
+    private val configDir = File(appContext.getExternalFilesDir(null), CONFIG_DIR)
     private val configFile = File(configDir, CONFIG_FILENAME)
     
     private var fileObserver: FileObserver? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var loadConfigRunnable: Runnable? = null
     
     // Preference namespaces
     private val dspPreferences = mapOf(
-        Constants.PREF_CONVOLVER to context.getSharedPreferences(Constants.PREF_CONVOLVER, Context.MODE_PRIVATE),
-        Constants.PREF_EQ to context.getSharedPreferences(Constants.PREF_EQ, Context.MODE_PRIVATE),
-        Constants.PREF_GEQ to context.getSharedPreferences(Constants.PREF_GEQ, Context.MODE_PRIVATE),
-        Constants.PREF_BASS to context.getSharedPreferences(Constants.PREF_BASS, Context.MODE_PRIVATE),
-        Constants.PREF_COMPANDER to context.getSharedPreferences(Constants.PREF_COMPANDER, Context.MODE_PRIVATE),
-        Constants.PREF_REVERB to context.getSharedPreferences(Constants.PREF_REVERB, Context.MODE_PRIVATE),
-        Constants.PREF_STEREOWIDE to context.getSharedPreferences(Constants.PREF_STEREOWIDE, Context.MODE_PRIVATE),
-        Constants.PREF_CROSSFEED to context.getSharedPreferences(Constants.PREF_CROSSFEED, Context.MODE_PRIVATE),
-        Constants.PREF_TUBE to context.getSharedPreferences(Constants.PREF_TUBE, Context.MODE_PRIVATE),
-        Constants.PREF_DDC to context.getSharedPreferences(Constants.PREF_DDC, Context.MODE_PRIVATE),
-        Constants.PREF_LIVEPROG to context.getSharedPreferences(Constants.PREF_LIVEPROG, Context.MODE_PRIVATE),
-        Constants.PREF_OUTPUT to context.getSharedPreferences(Constants.PREF_OUTPUT, Context.MODE_PRIVATE)
+        Constants.PREF_CONVOLVER to appContext.getSharedPreferences(Constants.PREF_CONVOLVER, Context.MODE_PRIVATE),
+        Constants.PREF_EQ to appContext.getSharedPreferences(Constants.PREF_EQ, Context.MODE_PRIVATE),
+        Constants.PREF_GEQ to appContext.getSharedPreferences(Constants.PREF_GEQ, Context.MODE_PRIVATE),
+        Constants.PREF_BASS to appContext.getSharedPreferences(Constants.PREF_BASS, Context.MODE_PRIVATE),
+        Constants.PREF_COMPANDER to appContext.getSharedPreferences(Constants.PREF_COMPANDER, Context.MODE_PRIVATE),
+        Constants.PREF_REVERB to appContext.getSharedPreferences(Constants.PREF_REVERB, Context.MODE_PRIVATE),
+        Constants.PREF_STEREOWIDE to appContext.getSharedPreferences(Constants.PREF_STEREOWIDE, Context.MODE_PRIVATE),
+        Constants.PREF_CROSSFEED to appContext.getSharedPreferences(Constants.PREF_CROSSFEED, Context.MODE_PRIVATE),
+        Constants.PREF_TUBE to appContext.getSharedPreferences(Constants.PREF_TUBE, Context.MODE_PRIVATE),
+        Constants.PREF_DDC to appContext.getSharedPreferences(Constants.PREF_DDC, Context.MODE_PRIVATE),
+        Constants.PREF_LIVEPROG to appContext.getSharedPreferences(Constants.PREF_LIVEPROG, Context.MODE_PRIVATE),
+        Constants.PREF_OUTPUT to appContext.getSharedPreferences(Constants.PREF_OUTPUT, Context.MODE_PRIVATE)
     )
     
     private var loudnessController: LoudnessController? = null
@@ -62,14 +68,14 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         }
         
         // Initialize loudness controller
-        loudnessController = LoudnessController(context)
+        loudnessController = LoudnessController(appContext)
     }
     
     fun startWatching() {
         Timber.d("Starting config file watcher for: ${configFile.absolutePath}")
         
         // Show toast for debugging
-        context.toast("Config file watcher started: ${configFile.name}")
+        appContext.toast("Config file watcher started: ${configFile.name}")
         
         // Watch the directory instead of the file directly
         fileObserver = object : FileObserver(configDir.absolutePath, OBSERVER_MASK) {
@@ -79,11 +85,14 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
                     when (event) {
                         FileObserver.MODIFY, FileObserver.MOVED_TO, FileObserver.CREATE -> {
                             Timber.d("Config file changed (event=$event, path=$path), reloading...")
-                            context.toast("Config file changed, reloading...")
+                            appContext.toast("Config file changed, reloading...")
+                            
+                            // Cancel any pending load
+                            loadConfigRunnable?.let { handler.removeCallbacks(it) }
+                            
                             // Add a small delay to ensure file write is complete
-                            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                                loadConfigFile()
-                            }, 100)
+                            loadConfigRunnable = Runnable { loadConfigFile() }
+                            handler.postDelayed(loadConfigRunnable!!, 100)
                         }
                     }
                 }
@@ -98,6 +107,13 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         Timber.d("Stopping config file watcher")
         fileObserver?.stopWatching()
         fileObserver = null
+        
+        // Cancel any pending runnables
+        loadConfigRunnable?.let { handler.removeCallbacks(it) }
+        loadConfigRunnable = null
+        
+        // Clean up handler callbacks
+        handler.removeCallbacksAndMessages(null)
     }
     
     private fun loadConfigFile() {
@@ -165,8 +181,8 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
             // Notify about preference changes
             if (changedNamespaces.isNotEmpty()) {
                 Timber.d("Config loaded, changed namespaces: $changedNamespaces")
-                context.toast("Applied changes: ${changedNamespaces.joinToString(", ")}")
-                context.sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+                appContext.toast("Applied changes: ${changedNamespaces.joinToString(", ")}")
+                appContext.sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
                     putExtra("namespaces", changedNamespaces.toTypedArray())
                 })
             } else {
@@ -175,7 +191,7 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
             
         } catch (e: Exception) {
             Timber.e(e, "Error loading config file")
-            context.toast("Error loading config: ${e.message}")
+            appContext.toast("Error loading config: ${e.message}")
         }
     }
     
@@ -223,21 +239,21 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
             // Handle enable/disable
             if (line.contains("Convolver=", ignoreCase = true) || line.contains("Convolver:", ignoreCase = true)) {
                 Timber.d("Setting convolver enabled: $enabled")
-                putBoolean(context.getString(R.string.key_convolver_enable), enabled)
+                putBoolean(appContext.getString(R.string.key_convolver_enable), enabled)
                 hasChanges = true
             }
             // Handle file path
             filePath?.let { 
                 Timber.d("Setting convolver file: $it")
-                putString(context.getString(R.string.key_convolver_file), it) 
+                putString(appContext.getString(R.string.key_convolver_file), it) 
                 hasChanges = true
             }
             modeMatch?.let { 
-                putString(context.getString(R.string.key_convolver_mode), it.groupValues[1])
+                putString(appContext.getString(R.string.key_convolver_mode), it.groupValues[1])
                 hasChanges = true
             }
             advMatch?.let { 
-                putString(context.getString(R.string.key_convolver_adv_imp), it.groupValues[1])
+                putString(appContext.getString(R.string.key_convolver_adv_imp), it.groupValues[1])
                 hasChanges = true
             }
         }
@@ -245,7 +261,7 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         return if (hasChanges && editor?.commit() == true) {
             Timber.d("Convolver preferences updated successfully")
             // Force reload the DSP effect
-            context.sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+            appContext.sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
                 putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER))
             })
             Constants.PREF_CONVOLVER
@@ -260,9 +276,9 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val bandsMatch = Regex("""bands="([^"]+)"""").find(line)
         
         return dspPreferences[Constants.PREF_GEQ]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_geq_enable), enabled)
+            putBoolean(appContext.getString(R.string.key_geq_enable), enabled)
             bandsMatch?.let { 
-                putString(context.getString(R.string.key_geq_nodes), "GraphicEQ: ${it.groupValues[1]}")
+                putString(appContext.getString(R.string.key_geq_nodes), "GraphicEQ: ${it.groupValues[1]}")
             }
         }?.commit()?.let { Constants.PREF_GEQ }
     }
@@ -275,10 +291,10 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val bandsMatch = Regex("""bands="([^"]+)"""").find(line)
         
         return dspPreferences[Constants.PREF_EQ]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_eq_enable), enabled)
-            typeMatch?.let { putString(context.getString(R.string.key_eq_filter_type), it.groupValues[1]) }
-            modeMatch?.let { putString(context.getString(R.string.key_eq_interpolation), it.groupValues[1]) }
-            bandsMatch?.let { putString(context.getString(R.string.key_eq_bands), it.groupValues[1]) }
+            putBoolean(appContext.getString(R.string.key_eq_enable), enabled)
+            typeMatch?.let { putString(appContext.getString(R.string.key_eq_filter_type), it.groupValues[1]) }
+            modeMatch?.let { putString(appContext.getString(R.string.key_eq_interpolation), it.groupValues[1]) }
+            bandsMatch?.let { putString(appContext.getString(R.string.key_eq_bands), it.groupValues[1]) }
         }?.commit()?.let { Constants.PREF_EQ }
     }
     
@@ -288,8 +304,8 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val gainMatch = Regex("""gain=([\d.]+)""").find(line)
         
         return dspPreferences[Constants.PREF_BASS]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_bass_enable), enabled)
-            gainMatch?.let { putFloat(context.getString(R.string.key_bass_max_gain), it.groupValues[1].toFloatOrNull() ?: 0f) }
+            putBoolean(appContext.getString(R.string.key_bass_enable), enabled)
+            gainMatch?.let { putFloat(appContext.getString(R.string.key_bass_max_gain), it.groupValues[1].toFloatOrNull() ?: 0f) }
         }?.commit()?.let { Constants.PREF_BASS }
     }
     
@@ -299,8 +315,8 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val presetMatch = Regex("""preset=(\d+)""").find(line)
         
         return dspPreferences[Constants.PREF_REVERB]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_reverb_enable), enabled)
-            presetMatch?.let { putString(context.getString(R.string.key_reverb_preset), it.groupValues[1]) }
+            putBoolean(appContext.getString(R.string.key_reverb_enable), enabled)
+            presetMatch?.let { putString(appContext.getString(R.string.key_reverb_preset), it.groupValues[1]) }
         }?.commit()?.let { Constants.PREF_REVERB }
     }
     
@@ -310,8 +326,8 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val levelMatch = Regex("""level=([\d.]+)""").find(line)
         
         return dspPreferences[Constants.PREF_STEREOWIDE]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_stereowide_enable), enabled)
-            levelMatch?.let { putFloat(context.getString(R.string.key_stereowide_mode), it.groupValues[1].toFloatOrNull() ?: 0f) }
+            putBoolean(appContext.getString(R.string.key_stereowide_enable), enabled)
+            levelMatch?.let { putFloat(appContext.getString(R.string.key_stereowide_mode), it.groupValues[1].toFloatOrNull() ?: 0f) }
         }?.commit()?.let { Constants.PREF_STEREOWIDE }
     }
     
@@ -321,8 +337,8 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val modeMatch = Regex("""mode=(\d+)""").find(line)
         
         return dspPreferences[Constants.PREF_CROSSFEED]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_crossfeed_enable), enabled)
-            modeMatch?.let { putString(context.getString(R.string.key_crossfeed_mode), it.groupValues[1]) }
+            putBoolean(appContext.getString(R.string.key_crossfeed_enable), enabled)
+            modeMatch?.let { putString(appContext.getString(R.string.key_crossfeed_mode), it.groupValues[1]) }
         }?.commit()?.let { Constants.PREF_CROSSFEED }
     }
     
@@ -332,8 +348,8 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val driveMatch = Regex("""drive=([\d.]+)""").find(line)
         
         return dspPreferences[Constants.PREF_TUBE]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_tube_enable), enabled)
-            driveMatch?.let { putFloat(context.getString(R.string.key_tube_drive), it.groupValues[1].toFloatOrNull() ?: 0f) }
+            putBoolean(appContext.getString(R.string.key_tube_enable), enabled)
+            driveMatch?.let { putFloat(appContext.getString(R.string.key_tube_drive), it.groupValues[1].toFloatOrNull() ?: 0f) }
         }?.commit()?.let { Constants.PREF_TUBE }
     }
     
@@ -343,8 +359,8 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val fileMatch = Regex("""file="([^"]+)"""").find(line)
         
         return dspPreferences[Constants.PREF_DDC]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_ddc_enable), enabled)
-            fileMatch?.let { putString(context.getString(R.string.key_ddc_file), it.groupValues[1]) }
+            putBoolean(appContext.getString(R.string.key_ddc_enable), enabled)
+            fileMatch?.let { putString(appContext.getString(R.string.key_ddc_file), it.groupValues[1]) }
         }?.commit()?.let { Constants.PREF_DDC }
     }
     
@@ -354,8 +370,8 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val fileMatch = Regex("""file="([^"]+)"""").find(line)
         
         return dspPreferences[Constants.PREF_LIVEPROG]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_liveprog_enable), enabled)
-            fileMatch?.let { putString(context.getString(R.string.key_liveprog_file), it.groupValues[1]) }
+            putBoolean(appContext.getString(R.string.key_liveprog_enable), enabled)
+            fileMatch?.let { putString(appContext.getString(R.string.key_liveprog_file), it.groupValues[1]) }
         }?.commit()?.let { Constants.PREF_LIVEPROG }
     }
     
@@ -375,11 +391,11 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
                 val gain = parts[1].trim().toFloatOrNull()
                 gain?.let {
                     Timber.d("Setting output gain: $it dB")
-                    editor?.putFloat(context.getString(R.string.key_output_postgain), it)
+                    editor?.putFloat(appContext.getString(R.string.key_output_postgain), it)
                     hasChanges = true
                     
                     // Log for debugging
-                    context.toast("Output gain: ${it}dB")
+                    appContext.toast("Output gain: ${it}dB")
                 }
             }
         }
@@ -393,15 +409,15 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
             gainMatch?.let { 
                 val gain = it.groupValues[1].toFloatOrNull() ?: 0f
                 Timber.d("Setting output gain (complex format): $gain dB")
-                editor?.putFloat(context.getString(R.string.key_output_postgain), gain)
+                editor?.putFloat(appContext.getString(R.string.key_output_postgain), gain)
                 hasChanges = true
             }
             thresholdMatch?.let { 
-                editor?.putFloat(context.getString(R.string.key_limiter_threshold), it.groupValues[1].toFloatOrNull() ?: -0.1f)
+                editor?.putFloat(appContext.getString(R.string.key_limiter_threshold), it.groupValues[1].toFloatOrNull() ?: -0.1f)
                 hasChanges = true
             }
             releaseMatch?.let { 
-                editor?.putFloat(context.getString(R.string.key_limiter_release), it.groupValues[1].toFloatOrNull() ?: 60f)
+                editor?.putFloat(appContext.getString(R.string.key_limiter_release), it.groupValues[1].toFloatOrNull() ?: 60f)
                 hasChanges = true
             }
         }
@@ -415,7 +431,7 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         return if (hasChanges && editor?.commit() == true) {
             Timber.d("Output preferences updated successfully")
             // Force reload the DSP effect
-            context.sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+            appContext.sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
                 putExtra("namespaces", arrayOf(Constants.PREF_OUTPUT))
             })
             Constants.PREF_OUTPUT
@@ -433,11 +449,11 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
         val responseMatch = Regex("""response="([^"]+)"""").find(line)
         
         return dspPreferences[Constants.PREF_COMPANDER]?.edit()?.apply {
-            putBoolean(context.getString(R.string.key_compander_enable), enabled)
-            tcMatch?.let { putFloat(context.getString(R.string.key_compander_timeconstant), it.groupValues[1].toFloatOrNull() ?: 0.22f) }
-            granMatch?.let { putFloat(context.getString(R.string.key_compander_granularity), it.groupValues[1].toFloatOrNull() ?: 2f) }
-            tfMatch?.let { putString(context.getString(R.string.key_compander_tftransforms), it.groupValues[1]) }
-            responseMatch?.let { putString(context.getString(R.string.key_compander_response), it.groupValues[1]) }
+            putBoolean(appContext.getString(R.string.key_compander_enable), enabled)
+            tcMatch?.let { putFloat(appContext.getString(R.string.key_compander_timeconstant), it.groupValues[1].toFloatOrNull() ?: 0.22f) }
+            granMatch?.let { putFloat(appContext.getString(R.string.key_compander_granularity), it.groupValues[1].toFloatOrNull() ?: 2f) }
+            tfMatch?.let { putString(appContext.getString(R.string.key_compander_tftransforms), it.groupValues[1]) }
+            responseMatch?.let { putString(appContext.getString(R.string.key_compander_response), it.groupValues[1]) }
         }?.commit()?.let { Constants.PREF_COMPANDER }
     }
     
@@ -529,23 +545,23 @@ class ConfigFileWatcher(private val context: Context) : KoinComponent {
             // Update convolver with the appropriate filter
             val editor = dspPreferences[Constants.PREF_CONVOLVER]?.edit()
             editor?.apply {
-                putBoolean(context.getString(R.string.key_convolver_enable), true)
-                putString(context.getString(R.string.key_convolver_file), filterFile)
+                putBoolean(appContext.getString(R.string.key_convolver_enable), true)
+                putString(appContext.getString(R.string.key_convolver_file), filterFile)
                 commit()
             }
             
             Timber.d("Applied loudness filter: $filterFile for ${listeningSPL}dB SPL listening")
-            context.toast("Loudness filter: ${listeningSPL}dB → Reference")
+            appContext.toast("Loudness filter: ${listeningSPL}dB → Reference")
             
             // Send broadcast to reload convolver
-            context.sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
+            appContext.sendLocalBroadcast(Intent(Constants.ACTION_PREFERENCES_UPDATED).apply {
                 putExtra("namespaces", arrayOf(Constants.PREF_CONVOLVER))
             })
         } else {
             // Disable convolver for loud listening
             val editor = dspPreferences[Constants.PREF_CONVOLVER]?.edit()
             editor?.apply {
-                putBoolean(context.getString(R.string.key_convolver_enable), false)
+                putBoolean(appContext.getString(R.string.key_convolver_enable), false)
                 commit()
             }
             
